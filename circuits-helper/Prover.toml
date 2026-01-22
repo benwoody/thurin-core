@@ -1,0 +1,14 @@
+# Helper circuit inputs - computes iaca_root and nullifier
+# Generated from: ./fixtures/california-over21.json
+
+# IACA public key X (32 bytes)
+pubkey_x = [80, 170, 21, 63, 198, 72, 97, 140, 175, 109, 44, 82, 230, 98, 44, 251, 40, 142, 122, 128, 93, 50, 236, 8, 243, 158, 158, 193, 195, 188, 17, 63]
+
+# IACA public key Y (32 bytes)
+pubkey_y = [110, 176, 7, 218, 49, 186, 18, 147, 230, 72, 74, 17, 55, 122, 191, 68, 114, 76, 196, 247, 203, 210, 114, 191, 156, 195, 169, 21, 42, 129, 171, 194]
+
+# Document number (32 bytes)
+document_number = [200, 43, 159, 93, 29, 59, 149, 11, 110, 1, 222, 32, 222, 172, 53, 199, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+# Event ID
+event_id = "0x1"

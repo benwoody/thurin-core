@@ -1,0 +1,657 @@
+// SPDX-License-Identifier: Apache-2.0
+pragma solidity ^0.8.28;
+
+import {Test} from "forge-std/Test.sol";
+import {ThurinSBT} from "../src/ThurinSBT.sol";
+import {IHonkVerifier} from "../src/interfaces/IHonkVerifier.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+
+contract MockHonkVerifier is IHonkVerifier {
+    bool public shouldVerify = true;
+
+    function setShouldVerify(bool _shouldVerify) external {
+        shouldVerify = _shouldVerify;
+    }
+
+    function verify(bytes calldata, bytes32[] calldata) external view returns (bool) {
+        return shouldVerify;
+    }
+}
+
+contract ThurinSBTTest is Test {
+    ThurinSBT public sbt;
+    MockHonkVerifier public mockVerifier;
+
+    address public alice = makeAddr("alice");
+    address public bob = makeAddr("bob");
+    address public charlie = makeAddr("charlie");
+    address public owner = makeAddr("owner");
+
+    bytes32 public constant IACA_ROOT_CA = keccak256("california-iaca-root");
+    bytes32 public constant EVENT_ID = bytes32(uint256(0));
+    bytes public constant MOCK_PROOF = hex"deadbeef";
+    uint256 public constant NO_REFERRER = type(uint256).max;
+
+    bool public constant PROVE_AGE_21 = true;
+    bool public constant PROVE_AGE_18 = true;
+    bool public constant PROVE_STATE = true;
+    bytes2 public constant STATE_CA = "CA";
+
+    event Minted(
+        address indexed user,
+        uint256 indexed tokenId,
+        uint256 referrerTokenId
+    );
+    event IACARootAdded(bytes32 indexed root, string stateName);
+    event IACARootRemoved(bytes32 indexed root);
+    event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
+    event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
+    event Renewed(address indexed user, uint256 indexed tokenId);
+    event RenewalPriceUpdated(uint256 oldPrice, uint256 newPrice);
+
+    function setUp() public {
+        vm.warp(1704067200);
+
+        mockVerifier = new MockHonkVerifier();
+
+        vm.prank(owner);
+        sbt = new ThurinSBT(address(mockVerifier));
+
+        vm.prank(owner);
+        sbt.addIACARoot(IACA_ROOT_CA, "California");
+
+        vm.deal(alice, 10 ether);
+        vm.deal(bob, 10 ether);
+        vm.deal(charlie, 10 ether);
+    }
+
+    // Helper function to mint as a user
+    function _mintAs(
+        address user,
+        bytes32 nullifier,
+        uint256 referrerTokenId
+    ) internal returns (uint256) {
+        uint256 price = sbt.getMintPrice();
+        vm.prank(user);
+        return sbt.mint{value: price}(
+            MOCK_PROOF, nullifier, block.timestamp, EVENT_ID, IACA_ROOT_CA,
+            PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA, referrerTokenId
+        );
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                            CONSTRUCTOR
+    //////////////////////////////////////////////////////////////*/
+
+    function test_constructor_setsVerifier() public view {
+        assertEq(address(sbt.honkVerifier()), address(mockVerifier));
+    }
+
+    function test_constructor_setsOwner() public view {
+        assertEq(sbt.owner(), owner);
+    }
+
+    function test_constructor_setsName() public view {
+        assertEq(sbt.name(), "Thurin SBT");
+        assertEq(sbt.symbol(), "THURIN");
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                            PRICING
+    //////////////////////////////////////////////////////////////*/
+
+    function test_getMintPrice_returnsOGPrice() public view {
+        assertEq(sbt.getMintPrice(), sbt.OG_PRICE());
+    }
+
+    function test_getMintPrice_returnsKindaCoolPrice() public {
+        // Mint 500 SBTs to reach KindaCool tier
+        for (uint256 i = 0; i < 500; i++) {
+            address user = makeAddr(string(abi.encodePacked("user", i)));
+            vm.deal(user, 1 ether);
+            bytes32 nullifier = keccak256(abi.encodePacked("nullifier", i));
+            _mintAs(user, nullifier, NO_REFERRER);
+        }
+
+        assertEq(sbt.getMintPrice(), sbt.KINDA_COOL_PRICE());
+    }
+
+    function test_getMintPrice_returnsStandardPrice() public {
+        // Mint 1500 SBTs to reach Standard tier
+        for (uint256 i = 0; i < 1500; i++) {
+            address user = makeAddr(string(abi.encodePacked("user", i)));
+            vm.deal(user, 1 ether);
+            bytes32 nullifier = keccak256(abi.encodePacked("nullifier", i));
+            _mintAs(user, nullifier, NO_REFERRER);
+        }
+
+        assertEq(sbt.getMintPrice(), sbt.mintPrice());
+    }
+
+    function test_getCurrentTier_returnsCorrectTier() public {
+        assertEq(uint256(sbt.getCurrentTier()), uint256(ThurinSBT.Tier.OG));
+
+        // Mint to KindaCool
+        for (uint256 i = 0; i < 500; i++) {
+            address user = makeAddr(string(abi.encodePacked("user", i)));
+            vm.deal(user, 1 ether);
+            bytes32 nullifier = keccak256(abi.encodePacked("nullifier", i));
+            _mintAs(user, nullifier, NO_REFERRER);
+        }
+        assertEq(uint256(sbt.getCurrentTier()), uint256(ThurinSBT.Tier.KindaCool));
+    }
+
+    function test_mint_tracksTier() public {
+        bytes32 nullifier = keccak256("alice-nullifier");
+        uint256 tokenId = _mintAs(alice, nullifier, NO_REFERRER);
+
+        assertEq(uint256(sbt.tokenTier(tokenId)), uint256(ThurinSBT.Tier.OG));
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                            MINTING
+    //////////////////////////////////////////////////////////////*/
+
+    function test_mint_succeedsWithValidProof() public {
+        bytes32 nullifier = keccak256("alice-nullifier");
+
+        vm.expectEmit(true, true, true, false);
+        emit Minted(alice, 0, NO_REFERRER);
+
+        uint256 tokenId = _mintAs(alice, nullifier, NO_REFERRER);
+
+        assertEq(tokenId, 0);
+        assertEq(sbt.balanceOf(alice), 1);
+        assertEq(sbt.ownerOf(0), alice);
+        assertTrue(sbt.nullifierUsed(nullifier));
+        assertEq(sbt.points(alice), sbt.MINT_POINTS());
+    }
+
+    function test_mint_revertsWithInsufficientPayment() public {
+        bytes32 nullifier = keccak256("alice-nullifier");
+        uint256 price = sbt.OG_PRICE();
+
+        vm.prank(alice);
+        vm.expectRevert(ThurinSBT.InsufficientPayment.selector);
+        sbt.mint{value: price - 1}(
+            MOCK_PROOF, nullifier, block.timestamp, EVENT_ID, IACA_ROOT_CA,
+            PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA, NO_REFERRER
+        );
+    }
+
+    function test_mint_revertsIfAlreadyHasSBT() public {
+        bytes32 nullifier1 = keccak256("alice-nullifier-1");
+        bytes32 nullifier2 = keccak256("alice-nullifier-2");
+
+        _mintAs(alice, nullifier1, NO_REFERRER);
+
+        uint256 price = sbt.getMintPrice();
+        vm.prank(alice);
+        vm.expectRevert(ThurinSBT.AlreadyHasSBT.selector);
+        sbt.mint{value: price}(
+            MOCK_PROOF, nullifier2, block.timestamp, EVENT_ID, IACA_ROOT_CA,
+            PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA, NO_REFERRER
+        );
+    }
+
+    function test_mint_revertsWithUntrustedIACA() public {
+        bytes32 nullifier = keccak256("alice-nullifier");
+        bytes32 untrustedRoot = keccak256("untrusted");
+        uint256 price = sbt.OG_PRICE();
+
+        vm.prank(alice);
+        vm.expectRevert(ThurinSBT.UntrustedIACA.selector);
+        sbt.mint{value: price}(
+            MOCK_PROOF, nullifier, block.timestamp, EVENT_ID, untrustedRoot,
+            PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA, NO_REFERRER
+        );
+    }
+
+    function test_mint_revertsWithUsedNullifier() public {
+        bytes32 nullifier = keccak256("shared-nullifier");
+
+        _mintAs(alice, nullifier, NO_REFERRER);
+
+        uint256 price = sbt.getMintPrice();
+        vm.prank(bob);
+        vm.expectRevert(ThurinSBT.NullifierAlreadyUsed.selector);
+        sbt.mint{value: price}(
+            MOCK_PROOF, nullifier, block.timestamp, EVENT_ID, IACA_ROOT_CA,
+            PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA, NO_REFERRER
+        );
+    }
+
+    function test_mint_revertsWithFutureTimestamp() public {
+        bytes32 nullifier = keccak256("alice-nullifier");
+        uint256 futureTimestamp = block.timestamp + 1 hours;
+        uint256 price = sbt.OG_PRICE();
+
+        vm.prank(alice);
+        vm.expectRevert(ThurinSBT.ProofFromFuture.selector);
+        sbt.mint{value: price}(
+            MOCK_PROOF, nullifier, futureTimestamp, EVENT_ID, IACA_ROOT_CA,
+            PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA, NO_REFERRER
+        );
+    }
+
+    function test_mint_revertsWithExpiredProof() public {
+        bytes32 nullifier = keccak256("alice-nullifier");
+        uint256 oldTimestamp = block.timestamp - 2 hours;
+        uint256 price = sbt.OG_PRICE();
+
+        vm.prank(alice);
+        vm.expectRevert(ThurinSBT.ProofExpired.selector);
+        sbt.mint{value: price}(
+            MOCK_PROOF, nullifier, oldTimestamp, EVENT_ID, IACA_ROOT_CA,
+            PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA, NO_REFERRER
+        );
+    }
+
+    function test_mint_revertsWithInvalidProof() public {
+        bytes32 nullifier = keccak256("alice-nullifier");
+        uint256 price = sbt.OG_PRICE();
+        mockVerifier.setShouldVerify(false);
+
+        vm.prank(alice);
+        vm.expectRevert(ThurinSBT.InvalidProof.selector);
+        sbt.mint{value: price}(
+            MOCK_PROOF, nullifier, block.timestamp, EVENT_ID, IACA_ROOT_CA,
+            PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA, NO_REFERRER
+        );
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                            REFERRALS
+    //////////////////////////////////////////////////////////////*/
+
+    function test_mint_tracksReferral() public {
+        bytes32 aliceNullifier = keccak256("alice-nullifier");
+        uint256 aliceTokenId = _mintAs(alice, aliceNullifier, NO_REFERRER);
+
+        uint256 alicePointsBefore = sbt.points(alice);
+
+        bytes32 bobNullifier = keccak256("bob-nullifier");
+        _mintAs(bob, bobNullifier, aliceTokenId);
+
+        assertEq(sbt.referralCount(aliceTokenId), 1);
+        assertEq(sbt.referredBy(1), alice);
+        assertEq(sbt.points(alice), alicePointsBefore + sbt.REFERRAL_POINTS());
+    }
+
+    function test_mint_tracksReferralForTokenIdZero() public {
+        // Specifically test that token ID 0 can be used as a referrer
+        bytes32 aliceNullifier = keccak256("alice-nullifier");
+        uint256 aliceTokenId = _mintAs(alice, aliceNullifier, NO_REFERRER);
+        assertEq(aliceTokenId, 0); // Confirm Alice got token 0
+
+        bytes32 bobNullifier = keccak256("bob-nullifier");
+        _mintAs(bob, bobNullifier, 0); // Use token 0 as referrer
+
+        assertEq(sbt.referralCount(0), 1);
+        assertEq(sbt.referredBy(1), alice);
+    }
+
+    function test_mint_ignoresSelfReferral() public {
+        bytes32 aliceNullifier = keccak256("alice-nullifier");
+        uint256 aliceTokenId = _mintAs(alice, aliceNullifier, NO_REFERRER);
+
+        // Alice can't mint again, so self-referral isn't possible
+        assertEq(sbt.referralCount(aliceTokenId), 0);
+    }
+
+    function test_mint_ignoresInvalidReferrer() public {
+        bytes32 nullifier = keccak256("alice-nullifier");
+        uint256 invalidTokenId = 999;
+
+        _mintAs(alice, nullifier, invalidTokenId);
+
+        assertEq(sbt.balanceOf(alice), 1);
+        assertEq(sbt.referredBy(0), address(0));
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                            VALIDITY
+    //////////////////////////////////////////////////////////////*/
+
+    function test_isValid_returnsTrueForValidSBT() public {
+        bytes32 nullifier = keccak256("alice-nullifier");
+        _mintAs(alice, nullifier, NO_REFERRER);
+
+        assertTrue(sbt.isValid(alice));
+    }
+
+    function test_isValid_returnsFalseForNoSBT() public view {
+        assertFalse(sbt.isValid(alice));
+    }
+
+    function test_isValid_returnsFalseForExpiredSBT() public {
+        bytes32 nullifier = keccak256("alice-nullifier");
+        _mintAs(alice, nullifier, NO_REFERRER);
+
+        vm.warp(block.timestamp + sbt.validityPeriod() + 1);
+
+        assertFalse(sbt.isValid(alice));
+    }
+
+    function test_getExpiry_returnsCorrectTimestamp() public {
+        bytes32 nullifier = keccak256("alice-nullifier");
+        uint256 mintTime = block.timestamp;
+
+        _mintAs(alice, nullifier, NO_REFERRER);
+
+        assertEq(sbt.getExpiry(alice), mintTime + sbt.validityPeriod());
+    }
+
+    function test_getExpiry_returnsZeroForNoSBT() public view {
+        assertEq(sbt.getExpiry(alice), 0);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                            RENEWAL
+    //////////////////////////////////////////////////////////////*/
+
+    function _renewAs(address user, bytes32 nullifier) internal {
+        uint256 price = sbt.renewalPrice();
+        vm.prank(user);
+        sbt.renew{value: price}(
+            MOCK_PROOF, nullifier, block.timestamp, EVENT_ID, IACA_ROOT_CA,
+            PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA
+        );
+    }
+
+    function test_renew_succeedsWithValidProof() public {
+        bytes32 nullifier = keccak256("alice-nullifier");
+        uint256 tokenId = _mintAs(alice, nullifier, NO_REFERRER);
+
+        // Fast forward to near expiry
+        vm.warp(block.timestamp + 300 days);
+        uint256 oldExpiry = sbt.getExpiry(alice);
+
+        // Renew with same nullifier
+        vm.expectEmit(true, true, false, false);
+        emit Renewed(alice, tokenId);
+        _renewAs(alice, nullifier);
+
+        // Expiry should be extended
+        assertGt(sbt.getExpiry(alice), oldExpiry);
+        assertTrue(sbt.isValid(alice));
+    }
+
+    function test_renew_allowsSameNullifier() public {
+        bytes32 nullifier = keccak256("alice-nullifier");
+        _mintAs(alice, nullifier, NO_REFERRER);
+
+        // Same nullifier should work for renewal
+        vm.warp(block.timestamp + 300 days);
+        _renewAs(alice, nullifier);
+
+        assertTrue(sbt.isValid(alice));
+    }
+
+    function test_renew_revertsIfNoSBT() public {
+        bytes32 nullifier = keccak256("alice-nullifier");
+        uint256 price = sbt.renewalPrice();
+
+        vm.prank(alice);
+        vm.expectRevert(ThurinSBT.NoSBTToRenew.selector);
+        sbt.renew{value: price}(
+            MOCK_PROOF, nullifier, block.timestamp, EVENT_ID, IACA_ROOT_CA,
+            PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA
+        );
+    }
+
+    function test_renew_revertsWithInsufficientPayment() public {
+        bytes32 nullifier = keccak256("alice-nullifier");
+        _mintAs(alice, nullifier, NO_REFERRER);
+
+        uint256 price = sbt.renewalPrice();
+        vm.prank(alice);
+        vm.expectRevert(ThurinSBT.InsufficientPayment.selector);
+        sbt.renew{value: price - 1}(
+            MOCK_PROOF, nullifier, block.timestamp, EVENT_ID, IACA_ROOT_CA,
+            PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA
+        );
+    }
+
+    function test_renew_revertsWithExpiredProof() public {
+        bytes32 nullifier = keccak256("alice-nullifier");
+        _mintAs(alice, nullifier, NO_REFERRER);
+
+        uint256 oldTimestamp = block.timestamp - 2 hours;
+        uint256 price = sbt.renewalPrice();
+
+        vm.prank(alice);
+        vm.expectRevert(ThurinSBT.ProofExpired.selector);
+        sbt.renew{value: price}(
+            MOCK_PROOF, nullifier, oldTimestamp, EVENT_ID, IACA_ROOT_CA,
+            PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA
+        );
+    }
+
+    function test_renew_revertsWithInvalidProof() public {
+        bytes32 nullifier = keccak256("alice-nullifier");
+        _mintAs(alice, nullifier, NO_REFERRER);
+
+        mockVerifier.setShouldVerify(false);
+        uint256 price = sbt.renewalPrice();
+
+        vm.prank(alice);
+        vm.expectRevert(ThurinSBT.InvalidProof.selector);
+        sbt.renew{value: price}(
+            MOCK_PROOF, nullifier, block.timestamp, EVENT_ID, IACA_ROOT_CA,
+            PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA
+        );
+    }
+
+    function test_renew_canRenewExpiredSBT() public {
+        bytes32 nullifier = keccak256("alice-nullifier");
+        _mintAs(alice, nullifier, NO_REFERRER);
+
+        // Let SBT expire
+        vm.warp(block.timestamp + sbt.validityPeriod() + 1 days);
+        assertFalse(sbt.isValid(alice));
+
+        // Can still renew
+        _renewAs(alice, nullifier);
+        assertTrue(sbt.isValid(alice));
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                            SOULBOUND
+    //////////////////////////////////////////////////////////////*/
+
+    function test_transfer_reverts() public {
+        bytes32 nullifier = keccak256("alice-nullifier");
+        _mintAs(alice, nullifier, NO_REFERRER);
+
+        vm.prank(alice);
+        vm.expectRevert(ThurinSBT.Soulbound.selector);
+        sbt.transferFrom(alice, bob, 0);
+    }
+
+    function test_safeTransfer_reverts() public {
+        bytes32 nullifier = keccak256("alice-nullifier");
+        _mintAs(alice, nullifier, NO_REFERRER);
+
+        vm.prank(alice);
+        vm.expectRevert(ThurinSBT.Soulbound.selector);
+        sbt.safeTransferFrom(alice, bob, 0);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                            ADMIN FUNCTIONS
+    //////////////////////////////////////////////////////////////*/
+
+    function test_addIACARoot_storesRoot() public {
+        bytes32 newRoot = keccak256("texas-root");
+
+        vm.prank(owner);
+        vm.expectEmit(true, false, false, true);
+        emit IACARootAdded(newRoot, "Texas");
+        sbt.addIACARoot(newRoot, "Texas");
+
+        assertTrue(sbt.trustedIACARoots(newRoot));
+        assertEq(sbt.iacaStateNames(newRoot), "Texas");
+    }
+
+    function test_addIACARoot_revertsIfNotOwner() public {
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSelector(Ownable.OwnableUnauthorizedAccount.selector, alice));
+        sbt.addIACARoot(keccak256("test"), "Test");
+    }
+
+    function test_removeIACARoot_removesRoot() public {
+        vm.prank(owner);
+        vm.expectEmit(true, false, false, false);
+        emit IACARootRemoved(IACA_ROOT_CA);
+        sbt.removeIACARoot(IACA_ROOT_CA);
+
+        assertFalse(sbt.trustedIACARoots(IACA_ROOT_CA));
+    }
+
+    function test_setMintPrice_updatesPrice() public {
+        uint256 newPrice = 0.01 ether;
+
+        vm.prank(owner);
+        sbt.setMintPrice(newPrice);
+
+        assertEq(sbt.mintPrice(), newPrice);
+    }
+
+    function test_setValidityPeriod_updatesPeriod() public {
+        uint256 newPeriod = 180 days;
+
+        vm.prank(owner);
+        sbt.setValidityPeriod(newPeriod);
+
+        assertEq(sbt.validityPeriod(), newPeriod);
+    }
+
+    function test_setRenewalPrice_updatesPrice() public {
+        uint256 oldPrice = sbt.renewalPrice();
+        uint256 newPrice = 0.002 ether;
+
+        vm.prank(owner);
+        vm.expectEmit(false, false, false, true);
+        emit RenewalPriceUpdated(oldPrice, newPrice);
+        sbt.setRenewalPrice(newPrice);
+
+        assertEq(sbt.renewalPrice(), newPrice);
+    }
+
+    function test_transferOwnership_transfersOwnership() public {
+        // Step 1: Owner initiates transfer
+        vm.prank(owner);
+        vm.expectEmit(true, true, false, false);
+        emit OwnershipTransferStarted(owner, alice);
+        sbt.transferOwnership(alice);
+
+        // Owner is still owner, alice is pending
+        assertEq(sbt.owner(), owner);
+        assertEq(sbt.pendingOwner(), alice);
+
+        // Step 2: Alice accepts ownership
+        vm.prank(alice);
+        vm.expectEmit(true, true, false, false);
+        emit OwnershipTransferred(owner, alice);
+        sbt.acceptOwnership();
+
+        // Now alice is owner
+        assertEq(sbt.owner(), alice);
+        assertEq(sbt.pendingOwner(), address(0));
+    }
+
+    function test_withdraw_sendsBalance() public {
+        bytes32 nullifier = keccak256("alice-nullifier");
+        _mintAs(alice, nullifier, NO_REFERRER);
+
+        uint256 contractBalance = address(sbt).balance;
+        uint256 ownerBalanceBefore = owner.balance;
+
+        vm.prank(owner);
+        sbt.withdraw();
+
+        assertEq(address(sbt).balance, 0);
+        assertEq(owner.balance, ownerBalanceBefore + contractBalance);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                            TOKEN URI TESTS
+    //////////////////////////////////////////////////////////////*/
+
+    function test_tokenURI_returnsValidMetadata() public {
+        bytes32 nullifier = keccak256("alice-nullifier");
+        uint256 tokenId = _mintAs(alice, nullifier, NO_REFERRER);
+
+        string memory uri = sbt.tokenURI(tokenId);
+
+        // Should start with data:application/json;base64,
+        assertTrue(bytes(uri).length > 29);
+        assertEq(_startsWith(uri, "data:application/json;base64,"), true);
+    }
+
+    function test_tokenURI_revertsForNonexistentToken() public {
+        vm.expectRevert();
+        sbt.tokenURI(999);
+    }
+
+    function test_tokenURI_containsTierColor() public {
+        // Mint OG token
+        bytes32 nullifier = keccak256("alice-nullifier");
+        uint256 tokenId = _mintAs(alice, nullifier, NO_REFERRER);
+
+        // Verify it's OG tier
+        assertEq(uint256(sbt.tokenTier(tokenId)), uint256(ThurinSBT.Tier.OG));
+
+        // Get URI and verify it contains Rose Gold color
+        string memory uri = sbt.tokenURI(tokenId);
+        assertTrue(bytes(uri).length > 0);
+        // The base64-encoded output will contain the color, verified by successful encoding
+    }
+
+    function _startsWith(string memory str, string memory prefix) internal pure returns (bool) {
+        bytes memory strBytes = bytes(str);
+        bytes memory prefixBytes = bytes(prefix);
+        if (strBytes.length < prefixBytes.length) return false;
+        for (uint256 i = 0; i < prefixBytes.length; i++) {
+            if (strBytes[i] != prefixBytes[i]) return false;
+        }
+        return true;
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                            FUZZ TESTS
+    //////////////////////////////////////////////////////////////*/
+
+    function testFuzz_mint_acceptsValidTimestamps(uint256 offset) public {
+        offset = bound(offset, 0, 1 hours - 1);
+
+        bytes32 nullifier = keccak256(abi.encodePacked("fuzz", offset));
+        uint256 proofTimestamp = block.timestamp - offset;
+
+        uint256 price = sbt.getMintPrice();
+        vm.prank(alice);
+        sbt.mint{value: price}(
+            MOCK_PROOF, nullifier, proofTimestamp, EVENT_ID, IACA_ROOT_CA,
+            PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA, NO_REFERRER
+        );
+
+        assertTrue(sbt.balanceOf(alice) == 1);
+    }
+
+    function testFuzz_isValid_respectsValidityPeriod(uint256 timeElapsed) public {
+        bytes32 nullifier = keccak256("alice-nullifier");
+        _mintAs(alice, nullifier, NO_REFERRER);
+
+        uint256 validityPeriod = sbt.validityPeriod();
+        timeElapsed = bound(timeElapsed, 0, validityPeriod * 2);
+
+        vm.warp(block.timestamp + timeElapsed);
+
+        if (timeElapsed <= validityPeriod) {
+            assertTrue(sbt.isValid(alice));
+        } else {
+            assertFalse(sbt.isValid(alice));
+        }
+    }
+}

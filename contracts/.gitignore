@@ -1,0 +1,18 @@
+# Compiler output
+cache/
+out/
+
+# Broadcast logs
+broadcast/
+
+# Docs
+docs/
+
+# Environment
+.env
+
+# Coverage
+lcov.info
+
+# OS
+.DS_Store

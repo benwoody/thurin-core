@@ -1,0 +1,52 @@
+{
+  "name": "@thurin/sdk",
+  "version": "0.0.1",
+  "description": "TypeScript SDK for Thurin mDL verification",
+  "license": "Apache-2.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./credential": {
+      "import": "./dist/credential/index.js",
+      "types": "./dist/credential/index.d.ts"
+    },
+    "./prover": {
+      "import": "./dist/prover/index.js",
+      "types": "./dist/prover/index.d.ts"
+    },
+    "./contract": {
+      "import": "./dist/contract/index.js",
+      "types": "./dist/contract/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts src/credential/index.ts src/prover/index.ts src/contract/index.ts --format esm",
+    "build:dts": "tsup src/index.ts src/credential/index.ts src/prover/index.ts src/contract/index.ts --format esm --dts",
+    "test": "vitest run",
+    "e2e:anvil": "tsx scripts/e2e-anvil.ts",
+    "lint": "eslint src/"
+  },
+  "dependencies": {
+    "@aztec/bb.js": "3.0.0-nightly.20260106",
+    "@noir-lang/noir_js": "1.0.0-beta.18",
+    "cborg": "^4.0.0",
+    "viem": "^2.21.0"
+  },
+  "peerDependencies": {
+    "viem": "^2.0.0"
+  },
+  "devDependencies": {
+    "tsup": "^8.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.3.0",
+    "vitest": "^1.0.0"
+  }
+}
