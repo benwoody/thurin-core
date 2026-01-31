@@ -12,6 +12,9 @@ line_length = 100
 tab_width = 4
 bracket_spacing = true
 
+[profile.ci]
+# Inherits from default
+
 [rpc_endpoints]
 # Mainnets
 mainnet = "${MAINNET_RPC_URL}"
