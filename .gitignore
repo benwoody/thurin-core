@@ -9,6 +9,11 @@ target/
 # Foundry
 cache/
 broadcast/
+docs/
+lcov.info
+
+# Coverage
+coverage/
 
 # Environment
 .env
