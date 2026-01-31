@@ -12,11 +12,13 @@ contract IntegrationTest is Test {
     ThurinVerifier public verifier;
     HonkVerifier public honkVerifier;
 
-    // Proof fixture values (generated from packages/circuits/)
-    bytes32 constant NULLIFIER = 0x1ca63d2c7aa6f7fd4b51b6e0fad8d2c4aa37f5ed994521ada76c1d39fdee89df;
-    uint256 constant PROOF_TIMESTAMP = 0x65920080; // 1704067200 = Jan 1, 2024
+    // Proof fixture values (generated from circuits/ with nargo + bb)
+    bytes32 constant NULLIFIER = 0x239b635af19e20630ee162e69a859af142f4b1b4881f39821624b4cdbce4011d;
+    bytes32 constant ADDRESS_BINDING = 0x0c44ca206b03e00a11126eb68bf22f767e2c0394ebd58c1aaa1959647558c604;
+    uint32 constant PROOF_DATE = 20240101; // YYYYMMDD format
+    uint256 constant PROOF_TIMESTAMP = 0x65920080; // 1704067200 = Jan 1, 2024 (for SBT mint)
     bytes32 constant EVENT_ID = bytes32(uint256(1));
-    bytes32 constant IACA_ROOT = 0x2417f53cd9ead423f21f71a17726d2de8e1642521d5e8fa0bc4593240d7f2de6;
+    bytes32 constant IACA_ROOT = 0x1a4b0af3464ac266543e11f1c1c7da4d3aa52719ab339bb45f5de7cb73b04b02;
     address constant BOUND_ADDRESS = 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045;
     bool constant PROVE_AGE_21 = true;
     bool constant PROVE_AGE_18 = true;
@@ -52,7 +54,8 @@ contract IntegrationTest is Test {
         uint256 tokenId = sbt.mint{value: price}(
             proof,
             NULLIFIER,
-            PROOF_TIMESTAMP,
+            ADDRESS_BINDING,
+            PROOF_DATE,
             EVENT_ID,
             IACA_ROOT,
             PROVE_AGE_21,
@@ -79,7 +82,8 @@ contract IntegrationTest is Test {
             BOUND_ADDRESS,
             proof,
             NULLIFIER,
-            PROOF_TIMESTAMP,
+            ADDRESS_BINDING,
+            PROOF_DATE,
             EVENT_ID,
             IACA_ROOT,
             PROVE_AGE_21,
@@ -99,7 +103,8 @@ contract IntegrationTest is Test {
         sbt.mint{value: price}(
             proof,
             NULLIFIER,
-            PROOF_TIMESTAMP,
+            ADDRESS_BINDING,
+            PROOF_DATE,
             EVENT_ID,
             IACA_ROOT,
             PROVE_AGE_21,

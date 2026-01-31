@@ -2,10 +2,11 @@
 # Generated from: ./fixtures/california-over21.json
 
 # === Public inputs ===
-nullifier = "0x1ca63d2c7aa6f7fd4b51b6e0fad8d2c4aa37f5ed994521ada76c1d39fdee89df"
-proof_timestamp = 1704067200
+nullifier = "0x239b635af19e20630ee162e69a859af142f4b1b4881f39821624b4cdbce4011d"
+address_binding = "0x0c44ca206b03e00a11126eb68bf22f767e2c0394ebd58c1aaa1959647558c604"
+proof_date = 20240101  # YYYYMMDD format - verifier contract validates against block.timestamp
 event_id = "0x1"
-iaca_root = "0x2417f53cd9ead423f21f71a17726d2de8e1642521d5e8fa0bc4593240d7f2de6"
+iaca_root = "0x1a4b0af3464ac266543e11f1c1c7da4d3aa52719ab339bb45f5de7cb73b04b02"
 bound_address = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045"
 prove_age_over_21 = true
 prove_age_over_18 = true

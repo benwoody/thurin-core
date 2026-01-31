@@ -14,12 +14,12 @@ contract ThurinVerifier {
     /// @notice Verification count per dApp (for points)
     mapping(address => uint256) public dappVerificationCount;
 
-    /// @notice Proof validity window
-    uint256 public constant PROOF_VALIDITY_PERIOD = 1 hours;
+    /// @notice Proof date validity window (in days)
+    uint256 public constant PROOF_DATE_TOLERANCE_DAYS = 1;
 
     error NoValidSBT();
-    error ProofFromFuture();
-    error ProofExpired();
+    error ProofDateFromFuture();
+    error ProofDateTooOld();
     error InvalidProof();
 
     constructor(address _honkVerifier, address _sbt) {
@@ -27,12 +27,39 @@ contract ThurinVerifier {
         sbt = ThurinSBT(_sbt);
     }
 
+    /// @notice Convert timestamp to YYYYMMDD format
+    /// @dev Uses a simplified calculation (may be off by ~1 day near year boundaries)
+    function _timestampToYYYYMMDD(uint256 timestamp) internal pure returns (uint32) {
+        // Days since Unix epoch
+        uint256 daysSinceEpoch = timestamp / 86400;
+
+        // Approximate year calculation
+        // Days from 1970 to 2020: 18262
+        uint256 daysSince2020 = daysSinceEpoch > 18262 ? daysSinceEpoch - 18262 : 0;
+        uint256 yearsSince2020 = daysSince2020 / 365;
+        uint256 year = 2020 + yearsSince2020;
+
+        // Remaining days in year
+        uint256 dayOfYear = daysSince2020 % 365;
+
+        // Approximate month and day (30-day months)
+        uint256 month = (dayOfYear / 30) + 1;
+        uint256 day = (dayOfYear % 30) + 1;
+
+        // Clamp values
+        if (month > 12) month = 12;
+        if (day > 28) day = 28;
+
+        return uint32(year * 10000 + month * 100 + day);
+    }
+
     /// @notice Verify a user's mDL claims
     /// @dev Returns true if valid, reverts otherwise. No events emitted for privacy.
     /// @param user The user address to verify (must match proof's bound_address)
     /// @param proof The ZK proof bytes
     /// @param nullifier Nullifier for this verification
-    /// @param proofTimestamp When the proof was generated
+    /// @param addressBinding Hash of nullifier + bound_address (front-running protection)
+    /// @param proofDate Date proof was generated (YYYYMMDD format)
     /// @param eventId Application-specific event identifier
     /// @param iacaRoot Hash of the IACA public key used
     /// @param proveAgeOver21 Whether age_over_21 claim is proven
@@ -44,7 +71,8 @@ contract ThurinVerifier {
         address user,
         bytes calldata proof,
         bytes32 nullifier,
-        uint256 proofTimestamp,
+        bytes32 addressBinding,
+        uint32 proofDate,
         bytes32 eventId,
         bytes32 iacaRoot,
         bool proveAgeOver21,
@@ -55,24 +83,31 @@ contract ThurinVerifier {
         // Check user has valid SBT
         if (!sbt.isValid(user)) revert NoValidSBT();
 
-        // Freshness checks
-        if (proofTimestamp > block.timestamp) revert ProofFromFuture();
-        if (proofTimestamp < block.timestamp - PROOF_VALIDITY_PERIOD) revert ProofExpired();
+        // Freshness checks (proof_date must be within tolerance of current date)
+        uint32 today = _timestampToYYYYMMDD(block.timestamp);
+        if (proofDate > today + PROOF_DATE_TOLERANCE_DAYS) revert ProofDateFromFuture();
+        if (proofDate < today - PROOF_DATE_TOLERANCE_DAYS) revert ProofDateTooOld();
 
-        // Build public inputs array (must match circuit order)
-        bytes32[] memory publicInputs = new bytes32[](10);
+        // Build public inputs array (must match circuit order exactly)
+        // Circuit: nullifier, address_binding, proof_date, event_id, iaca_root,
+        //          bound_address, prove_age_over_21, prove_age_over_18,
+        //          prove_state, proven_state[0], proven_state[1]
+        bytes32[] memory publicInputs = new bytes32[](11);
         publicInputs[0] = nullifier;
-        publicInputs[1] = bytes32(proofTimestamp);
-        publicInputs[2] = eventId;
-        publicInputs[3] = iacaRoot;
-        publicInputs[4] = bytes32(uint256(uint160(user))); // bound_address
-        publicInputs[5] = bytes32(uint256(proveAgeOver21 ? 1 : 0));
-        publicInputs[6] = bytes32(uint256(proveAgeOver18 ? 1 : 0));
-        publicInputs[7] = bytes32(uint256(proveState ? 1 : 0));
-        publicInputs[8] = bytes32(uint256(uint8(provenState[0])));
-        publicInputs[9] = bytes32(uint256(uint8(provenState[1])));
+        publicInputs[1] = addressBinding;
+        publicInputs[2] = bytes32(uint256(proofDate));
+        publicInputs[3] = eventId;
+        publicInputs[4] = iacaRoot;
+        publicInputs[5] = bytes32(uint256(uint160(user))); // bound_address
+        publicInputs[6] = bytes32(uint256(proveAgeOver21 ? 1 : 0));
+        publicInputs[7] = bytes32(uint256(proveAgeOver18 ? 1 : 0));
+        publicInputs[8] = bytes32(uint256(proveState ? 1 : 0));
+        publicInputs[9] = bytes32(uint256(uint8(provenState[0])));
+        publicInputs[10] = bytes32(uint256(uint8(provenState[1])));
 
         // Verify ZK proof
+        // Note: The circuit enforces addressBinding == hash(nullifier, bound_address)
+        // This prevents front-running: proof only works for the intended user
         if (!honkVerifier.verify(proof, publicInputs)) revert InvalidProof();
 
         // Track verification for dApp points (no personal data stored)

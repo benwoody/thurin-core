@@ -149,7 +149,7 @@ function getChain(chainId: number) {
  *
  * @example
  * ```typescript
- * import { Thurin, initProver } from '@thurin/sdk';
+ * import { Thurin, initProver } from '@thurinlabs/sdk';
  * import circuit from './thurin.json';
  *
  * // Initialize prover (once, on app load)

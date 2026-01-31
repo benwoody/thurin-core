@@ -1,6 +1,9 @@
 # Thurin Core - Build orchestration
 # Run `just --list` to see all commands
 
+# Add nargo to PATH
+export PATH := env_var("HOME") + "/.nargo/bin:" + env_var("PATH")
+
 # Default: show available commands
 default:
     @just --list
@@ -53,6 +56,38 @@ build-sdk:
 # Run SDK tests
 test-sdk:
     pnpm --filter sdk test
+
+# === Deploy (Testnets) ===
+
+# Deploy to Ethereum Sepolia
+deploy-sepolia:
+    cd contracts && forge script script/Deploy.s.sol --rpc-url sepolia --broadcast --verify
+
+# Deploy to Base Sepolia
+deploy-base-sepolia:
+    cd contracts && forge script script/Deploy.s.sol --rpc-url base_sepolia --broadcast --verify
+
+# Deploy to Scroll Sepolia
+deploy-scroll-sepolia:
+    cd contracts && forge script script/Deploy.s.sol --rpc-url scroll_sepolia --broadcast --verify
+
+# Deploy to Linea Sepolia
+deploy-linea-sepolia:
+    cd contracts && forge script script/Deploy.s.sol --rpc-url linea_sepolia --broadcast --verify
+
+# Deploy to Polygon zkEVM Cardona
+deploy-polygon-zkevm-cardona:
+    cd contracts && forge script script/Deploy.s.sol --rpc-url polygon_zkevm_cardona --broadcast --verify
+
+# Deploy to zkSync Sepolia (requires foundry-zksync + Apple Silicon Mac)
+# NOTE: No Intel Mac build available - run this from an M1/M2/M3/M4/M5 Mac
+# Install: curl -L https://raw.githubusercontent.com/matter-labs/foundry-zksync/main/install-foundry-zksync | bash
+deploy-zksync-sepolia:
+    cd contracts && forge script script/Deploy.s.sol --rpc-url zksync_sepolia --broadcast --zksync
+
+# Deploy to all testnets (except zkSync - run separately)
+deploy-all-testnets: deploy-sepolia deploy-base-sepolia deploy-scroll-sepolia deploy-linea-sepolia deploy-polygon-zkevm-cardona
+    @echo "Deployed to all EVM testnets. Run 'just deploy-zksync-sepolia' separately for zkSync."
 
 # === Utilities ===
 

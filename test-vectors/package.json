@@ -1,5 +1,5 @@
 {
-  "name": "@thurin/test-vectors",
+  "name": "@thurinlabs/test-vectors",
   "version": "0.0.1",
   "description": "Test data generation for Thurin circuits and SDK",
   "license": "Apache-2.0",

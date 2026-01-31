@@ -1,4 +1,4 @@
-# @thurin/contracts
+# @thurinlabs/contracts
 
 Solidity smart contracts for Thurin identity verification.
 
@@ -119,7 +119,7 @@ interface IThurinPoints {
 ### Simple: Just Check SBT
 
 ```solidity
-import { IThurinSBT } from "@thurin/contracts/interfaces/IThurinSBT.sol";
+import { IThurinSBT } from "@thurinlabs/contracts/interfaces/IThurinSBT.sol";
 
 contract MyDapp {
     IThurinSBT public sbt;
@@ -138,8 +138,8 @@ contract MyDapp {
 ### Advanced: Verify Specific Claims
 
 ```solidity
-import { IThurinSBT } from "@thurin/contracts/interfaces/IThurinSBT.sol";
-import { IThurinVerifier } from "@thurin/contracts/interfaces/IThurinVerifier.sol";
+import { IThurinSBT } from "@thurinlabs/contracts/interfaces/IThurinSBT.sol";
+import { IThurinVerifier } from "@thurinlabs/contracts/interfaces/IThurinVerifier.sol";
 
 contract AcmeCasino {
     IThurinSBT public sbt;
@@ -224,10 +224,14 @@ forge script script/Deploy.s.sol \
 
 ## Regenerating HonkVerifier
 
-When the circuit changes:
+When the circuit changes, from the monorepo root:
 
 ```bash
-cd packages/circuits
+# Using just (recommended)
+just circuits-full
+
+# Or manually
+cd circuits
 nargo compile
 bb write_vk -b target/thurin.json -o target/vk -t evm
 bb write_solidity_verifier -k target/vk/vk -o ../contracts/src/HonkVerifier.sol -t evm
@@ -240,7 +244,7 @@ bb write_solidity_verifier -k target/vk/vk -o ../contracts/src/HonkVerifier.sol 
 The integration test uses `test/fixtures/proof.bin`:
 
 ```bash
-cd packages/circuits
+cd circuits
 nargo execute
 bb prove -b target/thurin.json -w target/thurin.gz -k target/vk/vk -o target/proof -t evm
 cp target/proof/proof ../contracts/test/fixtures/proof.bin

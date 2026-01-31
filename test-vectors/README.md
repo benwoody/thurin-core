@@ -1,4 +1,4 @@
-# @thurin/test-vectors
+# @thurinlabs/test-vectors
 
 Test data generation for Thurin mDL verification.
 
@@ -24,7 +24,7 @@ This package generates valid mDL test data that can be used by both the Noir cir
 pnpm generate
 
 # Use in tests
-import testVector from '@thurin/test-vectors/fixtures/basic-california.json';
+import testVector from '@thurinlabs/test-vectors/fixtures/basic-california.json';
 ```
 
 ## Structure

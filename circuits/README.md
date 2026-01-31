@@ -1,4 +1,4 @@
-# @thurin/circuits
+# @thurinlabs/circuits
 
 Zero-knowledge circuits for mDL (mobile driver's license) verification, written in Noir.
 

@@ -25,12 +25,13 @@ contract MockDapp {
         address user,
         bytes calldata proof,
         bytes32 nullifier,
-        uint256 proofTimestamp,
+        bytes32 addressBinding,
+        uint32 proofDate,
         bytes32 eventId,
         bytes32 iacaRoot
     ) external returns (bool) {
         return verifier.verify(
-            user, proof, nullifier, proofTimestamp, eventId, iacaRoot,
+            user, proof, nullifier, addressBinding, proofDate, eventId, iacaRoot,
             true, true, true, "CA"
         );
     }
@@ -49,8 +50,10 @@ contract ThurinPointsTest is Test {
     address public owner = makeAddr("owner");
 
     bytes32 public constant IACA_ROOT = keccak256("california-iaca-root");
+    bytes32 public constant MOCK_ADDRESS_BINDING = keccak256("mock-address-binding");
     bytes public constant MOCK_PROOF = hex"deadbeef";
     uint256 public constant NO_REFERRER = type(uint256).max;
+    uint32 public constant PROOF_DATE = 20240101;
 
     event DappRegistered(address indexed dapp, string name);
     event DappPointsClaimed(address indexed dapp, uint256 points, uint256 totalVerifications);
@@ -80,13 +83,13 @@ contract ThurinPointsTest is Test {
         uint256 price = sbt.getMintPrice();
         vm.prank(user);
         sbt.mint{value: price}(
-            MOCK_PROOF, nullifier, block.timestamp, bytes32(0), IACA_ROOT,
+            MOCK_PROOF, nullifier, MOCK_ADDRESS_BINDING, PROOF_DATE, bytes32(0), IACA_ROOT,
             true, true, true, "CA", NO_REFERRER
         );
     }
 
     function _verifyVia(MockDapp dapp, address user, bytes32 nullifier) internal {
-        dapp.verifyUser(user, MOCK_PROOF, nullifier, block.timestamp, keccak256(abi.encode(nullifier)), IACA_ROOT);
+        dapp.verifyUser(user, MOCK_PROOF, nullifier, MOCK_ADDRESS_BINDING, PROOF_DATE, keccak256(abi.encode(nullifier)), IACA_ROOT);
     }
 
     /*//////////////////////////////////////////////////////////////

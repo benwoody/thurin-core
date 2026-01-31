@@ -147,7 +147,7 @@ contract ThurinPoints is Ownable2Step {
 
     /// @notice Get top dApps by verification count
     /// @dev Returns registered dApps sorted by verifications (simple impl, gas heavy for large lists)
-    /// @param limit Max number of dApps to return
+    /// @param limit Max number of dApps to return (capped at 100)
     /// @return dapps Array of dApp addresses
     /// @return verifications Array of verification counts
     function getTopDapps(uint256 limit) external view returns (
@@ -155,6 +155,7 @@ contract ThurinPoints is Ownable2Step {
         uint256[] memory verifications
     ) {
         uint256 count = registeredDapps.length;
+        if (limit > 100) limit = 100; // Cap to prevent DoS
         if (limit > count) limit = count;
 
         dapps = new address[](limit);

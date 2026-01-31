@@ -11,7 +11,8 @@ import {ThurinPoints} from "../src/ThurinPoints.sol";
 contract MintTestScript is Script {
     // Proof fixture values (from packages/circuits/)
     bytes32 constant NULLIFIER = 0x1ca63d2c7aa6f7fd4b51b6e0fad8d2c4aa37f5ed994521ada76c1d39fdee89df;
-    uint256 constant PROOF_TIMESTAMP = 1704067200;
+    bytes32 constant ADDRESS_BINDING = 0x0; // TODO: Regenerate with new circuit
+    uint32 constant PROOF_DATE = 20240101; // YYYYMMDD format
     bytes32 constant EVENT_ID = bytes32(uint256(1));
     bytes32 constant IACA_ROOT = 0x2417f53cd9ead423f21f71a17726d2de8e1642521d5e8fa0bc4593240d7f2de6;
     uint256 constant NO_REFERRER = type(uint256).max;
@@ -61,7 +62,8 @@ contract MintTestScript is Script {
         uint256 tokenId = sbt.mint{value: price}(
             proof,
             NULLIFIER,
-            PROOF_TIMESTAMP,
+            ADDRESS_BINDING,
+            PROOF_DATE,
             EVENT_ID,
             IACA_ROOT,
             true,  // reveal age 21+

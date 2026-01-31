@@ -48,7 +48,7 @@ contract ThurinSBT is ERC721, Ownable2Step {
 
     // Validity
     uint256 public validityPeriod = 365 days;
-    uint256 public constant PROOF_VALIDITY_PERIOD = 1 hours;
+    uint256 public constant PROOF_DATE_TOLERANCE_DAYS = 1;
     uint256 public constant MIN_VALIDITY_PERIOD = 1 days;
 
     // Events
@@ -65,8 +65,8 @@ contract ThurinSBT is ERC721, Ownable2Step {
     event Renewed(address indexed user, uint256 indexed tokenId);
 
     // Errors
-    error ProofFromFuture();
-    error ProofExpired();
+    error ProofDateFromFuture();
+    error ProofDateTooOld();
     error UntrustedIACA();
     error NullifierAlreadyUsed();
     error InvalidProof();
@@ -77,8 +77,36 @@ contract ThurinSBT is ERC721, Ownable2Step {
     error WithdrawFailed();
     error NoSBTToRenew();
 
+    // Struct to reduce stack depth in mint/renew
+    struct ProofParams {
+        bytes32 nullifier;
+        bytes32 addressBinding;
+        uint32 proofDate;
+        bytes32 eventId;
+        bytes32 iacaRoot;
+        bool proveAgeOver21;
+        bool proveAgeOver18;
+        bool proveState;
+        bytes2 provenState;
+    }
+
     constructor(address _honkVerifier) ERC721("Thurin SBT", "THURIN") Ownable(msg.sender) {
         honkVerifier = IHonkVerifier(_honkVerifier);
+    }
+
+    /// @notice Convert timestamp to YYYYMMDD format
+    /// @dev Uses a simplified calculation (may be off by ~1 day near year boundaries)
+    function _timestampToYYYYMMDD(uint256 timestamp) internal pure returns (uint32) {
+        uint256 daysSinceEpoch = timestamp / 86400;
+        uint256 daysSince2020 = daysSinceEpoch > 18262 ? daysSinceEpoch - 18262 : 0;
+        uint256 yearsSince2020 = daysSince2020 / 365;
+        uint256 year = 2020 + yearsSince2020;
+        uint256 dayOfYear = daysSince2020 % 365;
+        uint256 month = (dayOfYear / 30) + 1;
+        uint256 day = (dayOfYear % 30) + 1;
+        if (month > 12) month = 12;
+        if (day > 28) day = 28;
+        return uint32(year * 10000 + month * 100 + day);
     }
 
     /// @notice Get current mint price based on supply tier
@@ -102,21 +130,50 @@ contract ThurinSBT is ERC721, Ownable2Step {
         return _tokenIdCounter;
     }
 
+    /// @dev Internal helper to verify ZK proof - reduces stack depth
+    function _verifyProof(bytes calldata proof, ProofParams memory p) internal view {
+        // Build public inputs array (must match circuit order)
+        bytes32[] memory publicInputs = new bytes32[](11);
+        publicInputs[0] = p.nullifier;
+        publicInputs[1] = p.addressBinding;
+        publicInputs[2] = bytes32(uint256(p.proofDate));
+        publicInputs[3] = p.eventId;
+        publicInputs[4] = p.iacaRoot;
+        publicInputs[5] = bytes32(uint256(uint160(msg.sender)));
+        publicInputs[6] = bytes32(uint256(p.proveAgeOver21 ? 1 : 0));
+        publicInputs[7] = bytes32(uint256(p.proveAgeOver18 ? 1 : 0));
+        publicInputs[8] = bytes32(uint256(p.proveState ? 1 : 0));
+        publicInputs[9] = bytes32(uint256(uint8(p.provenState[0])));
+        publicInputs[10] = bytes32(uint256(uint8(p.provenState[1])));
+
+        if (!honkVerifier.verify(proof, publicInputs)) revert InvalidProof();
+    }
+
+    /// @dev Internal helper to validate proof freshness and trust
+    function _validateProofParams(ProofParams memory p) internal view {
+        uint32 today = _timestampToYYYYMMDD(block.timestamp);
+        if (p.proofDate > today + PROOF_DATE_TOLERANCE_DAYS) revert ProofDateFromFuture();
+        if (p.proofDate < today - PROOF_DATE_TOLERANCE_DAYS) revert ProofDateTooOld();
+        if (!trustedIACARoots[p.iacaRoot]) revert UntrustedIACA();
+    }
+
     /// @notice Mint a Thurin SBT with a valid ZK proof
     /// @param proof The ZK proof bytes
     /// @param nullifier Nullifier derived from document number
-    /// @param proofTimestamp When the proof was generated
+    /// @param addressBinding Hash of nullifier + bound_address (front-running protection)
+    /// @param proofDate Date proof was generated (YYYYMMDD format)
     /// @param eventId Application-specific event identifier (use 0 for SBT mint)
     /// @param iacaRoot Hash of the IACA public key used
     /// @param proveAgeOver21 Whether age_over_21 claim is proven
     /// @param proveAgeOver18 Whether age_over_18 claim is proven
     /// @param proveState Whether state claim is proven
     /// @param provenState The 2-byte state code (e.g., "CA")
-    /// @param referrerTokenId Token ID of referrer (0 for no referral)
+    /// @param referrerTokenId Token ID of referrer (type(uint256).max for no referral)
     function mint(
         bytes calldata proof,
         bytes32 nullifier,
-        uint256 proofTimestamp,
+        bytes32 addressBinding,
+        uint32 proofDate,
         bytes32 eventId,
         bytes32 iacaRoot,
         bool proveAgeOver21,
@@ -129,33 +186,26 @@ contract ThurinSBT is ERC721, Ownable2Step {
         if (balanceOf(msg.sender) > 0) revert AlreadyHasSBT();
 
         // Check payment
-        if (msg.value < getMintPrice()) revert InsufficientPayment();
+        uint256 price = getMintPrice();
+        if (msg.value < price) revert InsufficientPayment();
 
-        // Freshness checks
-        if (proofTimestamp > block.timestamp) revert ProofFromFuture();
-        if (proofTimestamp < block.timestamp - PROOF_VALIDITY_PERIOD) revert ProofExpired();
+        // Build params struct (reduces stack depth)
+        ProofParams memory p = ProofParams({
+            nullifier: nullifier,
+            addressBinding: addressBinding,
+            proofDate: proofDate,
+            eventId: eventId,
+            iacaRoot: iacaRoot,
+            proveAgeOver21: proveAgeOver21,
+            proveAgeOver18: proveAgeOver18,
+            proveState: proveState,
+            provenState: provenState
+        });
 
-        // Trust check
-        if (!trustedIACARoots[iacaRoot]) revert UntrustedIACA();
-
-        // Sybil check
+        // Validate and verify
+        _validateProofParams(p);
         if (nullifierUsed[nullifier]) revert NullifierAlreadyUsed();
-
-        // Build public inputs array (must match circuit order)
-        bytes32[] memory publicInputs = new bytes32[](10);
-        publicInputs[0] = nullifier;
-        publicInputs[1] = bytes32(proofTimestamp);
-        publicInputs[2] = eventId;
-        publicInputs[3] = iacaRoot;
-        publicInputs[4] = bytes32(uint256(uint160(msg.sender)));
-        publicInputs[5] = bytes32(uint256(proveAgeOver21 ? 1 : 0));
-        publicInputs[6] = bytes32(uint256(proveAgeOver18 ? 1 : 0));
-        publicInputs[7] = bytes32(uint256(proveState ? 1 : 0));
-        publicInputs[8] = bytes32(uint256(uint8(provenState[0])));
-        publicInputs[9] = bytes32(uint256(uint8(provenState[1])));
-
-        // Verify ZK proof
-        if (!honkVerifier.verify(proof, publicInputs)) revert InvalidProof();
+        _verifyProof(proof, p);
 
         // Mark nullifier used
         nullifierUsed[nullifier] = true;
@@ -182,6 +232,12 @@ contract ThurinSBT is ERC721, Ownable2Step {
         points[msg.sender] += MINT_POINTS;
 
         emit Minted(msg.sender, tokenId, referrerTokenId);
+
+        // Refund excess payment
+        if (msg.value > price) {
+            (bool success,) = payable(msg.sender).call{value: msg.value - price}("");
+            if (!success) revert WithdrawFailed();
+        }
 
         return tokenId;
     }
@@ -265,7 +321,8 @@ contract ThurinSBT is ERC721, Ownable2Step {
     /// @dev Requires payment and fresh proof, but allows same nullifier for existing holders
     /// @param proof The ZK proof bytes
     /// @param nullifier Nullifier derived from document number
-    /// @param proofTimestamp When the proof was generated
+    /// @param addressBinding Hash of nullifier + bound_address (front-running protection)
+    /// @param proofDate Date proof was generated (YYYYMMDD format)
     /// @param eventId Application-specific event identifier
     /// @param iacaRoot Hash of the IACA public key used
     /// @param proveAgeOver21 Whether age_over_21 claim is proven
@@ -275,7 +332,8 @@ contract ThurinSBT is ERC721, Ownable2Step {
     function renew(
         bytes calldata proof,
         bytes32 nullifier,
-        uint256 proofTimestamp,
+        bytes32 addressBinding,
+        uint32 proofDate,
         bytes32 eventId,
         bytes32 iacaRoot,
         bool proveAgeOver21,
@@ -287,38 +345,37 @@ contract ThurinSBT is ERC721, Ownable2Step {
         if (balanceOf(msg.sender) == 0) revert NoSBTToRenew();
 
         // Check payment
-        if (msg.value < renewalPrice) revert InsufficientPayment();
+        uint256 price = renewalPrice;
+        if (msg.value < price) revert InsufficientPayment();
 
-        // Freshness checks
-        if (proofTimestamp > block.timestamp) revert ProofFromFuture();
-        if (proofTimestamp < block.timestamp - PROOF_VALIDITY_PERIOD) revert ProofExpired();
+        // Build params struct (reduces stack depth)
+        ProofParams memory p = ProofParams({
+            nullifier: nullifier,
+            addressBinding: addressBinding,
+            proofDate: proofDate,
+            eventId: eventId,
+            iacaRoot: iacaRoot,
+            proveAgeOver21: proveAgeOver21,
+            proveAgeOver18: proveAgeOver18,
+            proveState: proveState,
+            provenState: provenState
+        });
 
-        // Trust check
-        if (!trustedIACARoots[iacaRoot]) revert UntrustedIACA();
-
-        // NOTE: No nullifierUsed check - same nullifier allowed for renewal
-
-        // Build public inputs array (must match circuit order)
-        bytes32[] memory publicInputs = new bytes32[](10);
-        publicInputs[0] = nullifier;
-        publicInputs[1] = bytes32(proofTimestamp);
-        publicInputs[2] = eventId;
-        publicInputs[3] = iacaRoot;
-        publicInputs[4] = bytes32(uint256(uint160(msg.sender)));
-        publicInputs[5] = bytes32(uint256(proveAgeOver21 ? 1 : 0));
-        publicInputs[6] = bytes32(uint256(proveAgeOver18 ? 1 : 0));
-        publicInputs[7] = bytes32(uint256(proveState ? 1 : 0));
-        publicInputs[8] = bytes32(uint256(uint8(provenState[0])));
-        publicInputs[9] = bytes32(uint256(uint8(provenState[1])));
-
-        // Verify ZK proof
-        if (!honkVerifier.verify(proof, publicInputs)) revert InvalidProof();
+        // Validate and verify (NOTE: No nullifierUsed check - same nullifier allowed for renewal)
+        _validateProofParams(p);
+        _verifyProof(proof, p);
 
         // Reset validity timestamp
         uint256 tokenId = userTokenId[msg.sender];
         tokenMintTimestamp[tokenId] = block.timestamp;
 
         emit Renewed(msg.sender, tokenId);
+
+        // Refund excess payment
+        if (msg.value > price) {
+            (bool success,) = payable(msg.sender).call{value: msg.value - price}("");
+            if (!success) revert WithdrawFailed();
+        }
     }
 
     // Soulbound: disable transfers

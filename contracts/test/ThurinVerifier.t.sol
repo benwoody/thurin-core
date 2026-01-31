@@ -29,7 +29,8 @@ contract MockDapp {
         address user,
         bytes calldata proof,
         bytes32 nullifier,
-        uint256 proofTimestamp,
+        bytes32 addressBinding,
+        uint32 proofDate,
         bytes32 eventId,
         bytes32 iacaRoot,
         bool proveAgeOver21,
@@ -38,7 +39,7 @@ contract MockDapp {
         bytes2 provenState
     ) external returns (bool) {
         return verifier.verify(
-            user, proof, nullifier, proofTimestamp, eventId, iacaRoot,
+            user, proof, nullifier, addressBinding, proofDate, eventId, iacaRoot,
             proveAgeOver21, proveAgeOver18, proveState, provenState
         );
     }
@@ -56,8 +57,10 @@ contract ThurinVerifierTest is Test {
 
     bytes32 public constant IACA_ROOT_CA = keccak256("california-iaca-root");
     bytes32 public constant EVENT_ID = keccak256("acme-age-check");
+    bytes32 public constant MOCK_ADDRESS_BINDING = keccak256("mock-address-binding");
     bytes public constant MOCK_PROOF = hex"deadbeef";
     uint256 public constant NO_REFERRER = type(uint256).max;
+    uint32 public constant PROOF_DATE_20240101 = 20240101; // Matches vm.warp(1704067200)
 
     bool public constant PROVE_AGE_21 = true;
     bool public constant PROVE_AGE_18 = true;
@@ -88,7 +91,7 @@ contract ThurinVerifierTest is Test {
         uint256 price = sbt.getMintPrice();
         vm.prank(user);
         sbt.mint{value: price}(
-            MOCK_PROOF, nullifier, block.timestamp, bytes32(0), IACA_ROOT_CA,
+            MOCK_PROOF, nullifier, MOCK_ADDRESS_BINDING, PROOF_DATE_20240101, bytes32(0), IACA_ROOT_CA,
             PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA, NO_REFERRER
         );
     }
@@ -115,8 +118,8 @@ contract ThurinVerifierTest is Test {
         bytes32 nullifier = keccak256("verification-nullifier");
 
         bool result = dapp.verifyUser(
-            alice, MOCK_PROOF, nullifier, block.timestamp, EVENT_ID, IACA_ROOT_CA,
-            PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA
+            alice, MOCK_PROOF, nullifier, MOCK_ADDRESS_BINDING, PROOF_DATE_20240101,
+            EVENT_ID, IACA_ROOT_CA, PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA
         );
 
         assertTrue(result);
@@ -127,49 +130,50 @@ contract ThurinVerifierTest is Test {
 
         vm.expectRevert(ThurinVerifier.NoValidSBT.selector);
         dapp.verifyUser(
-            alice, MOCK_PROOF, nullifier, block.timestamp, EVENT_ID, IACA_ROOT_CA,
-            PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA
+            alice, MOCK_PROOF, nullifier, MOCK_ADDRESS_BINDING, PROOF_DATE_20240101,
+            EVENT_ID, IACA_ROOT_CA, PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA
         );
     }
 
     function test_verify_revertsWithExpiredSBT() public {
         _mintSBT(alice);
 
-        // Warp past SBT validity period
+        // Warp past SBT validity period (to 2025)
         vm.warp(block.timestamp + sbt.validityPeriod() + 1);
 
         bytes32 nullifier = keccak256("verification-nullifier");
+        uint32 futureDate = 20250101; // Date matches warped time
 
         vm.expectRevert(ThurinVerifier.NoValidSBT.selector);
         dapp.verifyUser(
-            alice, MOCK_PROOF, nullifier, block.timestamp, EVENT_ID, IACA_ROOT_CA,
-            PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA
+            alice, MOCK_PROOF, nullifier, MOCK_ADDRESS_BINDING, futureDate,
+            EVENT_ID, IACA_ROOT_CA, PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA
         );
     }
 
-    function test_verify_revertsWithFutureTimestamp() public {
+    function test_verify_revertsWithFutureDate() public {
         _mintSBT(alice);
 
         bytes32 nullifier = keccak256("verification-nullifier");
-        uint256 futureTimestamp = block.timestamp + 1 hours;
+        uint32 futureDate = 20240105; // 4 days in future (tolerance is 1 day)
 
-        vm.expectRevert(ThurinVerifier.ProofFromFuture.selector);
+        vm.expectRevert(ThurinVerifier.ProofDateFromFuture.selector);
         dapp.verifyUser(
-            alice, MOCK_PROOF, nullifier, futureTimestamp, EVENT_ID, IACA_ROOT_CA,
-            PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA
+            alice, MOCK_PROOF, nullifier, MOCK_ADDRESS_BINDING, futureDate,
+            EVENT_ID, IACA_ROOT_CA, PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA
         );
     }
 
-    function test_verify_revertsWithExpiredProof() public {
+    function test_verify_revertsWithOldDate() public {
         _mintSBT(alice);
 
         bytes32 nullifier = keccak256("verification-nullifier");
-        uint256 oldTimestamp = block.timestamp - 2 hours;
+        uint32 oldDate = 20231225; // A week before (tolerance is 1 day)
 
-        vm.expectRevert(ThurinVerifier.ProofExpired.selector);
+        vm.expectRevert(ThurinVerifier.ProofDateTooOld.selector);
         dapp.verifyUser(
-            alice, MOCK_PROOF, nullifier, oldTimestamp, EVENT_ID, IACA_ROOT_CA,
-            PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA
+            alice, MOCK_PROOF, nullifier, MOCK_ADDRESS_BINDING, oldDate,
+            EVENT_ID, IACA_ROOT_CA, PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA
         );
     }
 
@@ -181,8 +185,8 @@ contract ThurinVerifierTest is Test {
 
         vm.expectRevert(ThurinVerifier.InvalidProof.selector);
         dapp.verifyUser(
-            alice, MOCK_PROOF, nullifier, block.timestamp, EVENT_ID, IACA_ROOT_CA,
-            PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA
+            alice, MOCK_PROOF, nullifier, MOCK_ADDRESS_BINDING, PROOF_DATE_20240101,
+            EVENT_ID, IACA_ROOT_CA, PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA
         );
     }
 
@@ -200,15 +204,15 @@ contract ThurinVerifierTest is Test {
         assertEq(verifier.dappVerificationCount(address(dapp)), 0);
 
         dapp.verifyUser(
-            alice, MOCK_PROOF, nullifier1, block.timestamp, EVENT_ID, IACA_ROOT_CA,
-            PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA
+            alice, MOCK_PROOF, nullifier1, MOCK_ADDRESS_BINDING, PROOF_DATE_20240101,
+            EVENT_ID, IACA_ROOT_CA, PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA
         );
 
         assertEq(verifier.dappVerificationCount(address(dapp)), 1);
 
         dapp.verifyUser(
-            bob, MOCK_PROOF, nullifier2, block.timestamp, EVENT_ID, IACA_ROOT_CA,
-            PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA
+            bob, MOCK_PROOF, nullifier2, MOCK_ADDRESS_BINDING, PROOF_DATE_20240101,
+            EVENT_ID, IACA_ROOT_CA, PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA
         );
 
         assertEq(verifier.dappVerificationCount(address(dapp)), 2);
@@ -223,13 +227,13 @@ contract ThurinVerifierTest is Test {
         bytes32 nullifier2 = keccak256("nullifier-2");
 
         dapp.verifyUser(
-            alice, MOCK_PROOF, nullifier1, block.timestamp, keccak256("event-1"), IACA_ROOT_CA,
-            PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA
+            alice, MOCK_PROOF, nullifier1, MOCK_ADDRESS_BINDING, PROOF_DATE_20240101,
+            keccak256("event-1"), IACA_ROOT_CA, PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA
         );
 
         dapp2.verifyUser(
-            alice, MOCK_PROOF, nullifier2, block.timestamp, keccak256("event-2"), IACA_ROOT_CA,
-            PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA
+            alice, MOCK_PROOF, nullifier2, MOCK_ADDRESS_BINDING, PROOF_DATE_20240101,
+            keccak256("event-2"), IACA_ROOT_CA, PROVE_AGE_21, PROVE_AGE_18, PROVE_STATE, STATE_CA
         );
 
         assertEq(verifier.dappVerificationCount(address(dapp)), 1);
@@ -276,7 +280,8 @@ contract ThurinVerifierTest is Test {
 
         // Only prove age over 21, not state - proof still verifies
         bool result = dapp.verifyUser(
-            alice, MOCK_PROOF, nullifier, block.timestamp, EVENT_ID, IACA_ROOT_CA,
+            alice, MOCK_PROOF, nullifier, MOCK_ADDRESS_BINDING, PROOF_DATE_20240101,
+            EVENT_ID, IACA_ROOT_CA,
             true,  // prove age 21
             false, // don't prove age 18
             false, // don't prove state

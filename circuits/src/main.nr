@@ -13,17 +13,18 @@ use std::ecdsa_secp256r1;
 
 use cbor::{extract_age_over_21, extract_age_over_18, extract_state_code};
 use mso::{extract_mso_digest, extract_mso_valid_until, MSO_DIGEST_0_OFFSET, MSO_DIGEST_1_OFFSET, MSO_DIGEST_2_OFFSET};
-use nullifier::{compute_iaca_root, compute_nullifier};
-use utils::{bytes32_eq, timestamp_to_yyyymmdd};
+use nullifier::{compute_address_binding, compute_iaca_root, compute_nullifier};
+use utils::bytes32_eq;
 
 /// Main circuit entry point
 fn main(
     // === Public inputs (revealed on-chain) ===
     nullifier: pub Field,
-    proof_timestamp: pub u64,
+    address_binding: pub Field, // Hash of nullifier + bound_address for front-running protection
+    proof_date: pub u32, // YYYYMMDD format - verifier contract validates against block.timestamp
     event_id: pub Field,
     iaca_root: pub Field,
-    _bound_address: pub Field, // Wallet address this proof is bound to
+    bound_address: pub Field, // Wallet address this proof is bound to
     // Optional proofs (0 = don't verify/prove)
     prove_age_over_21: pub bool,
     prove_age_over_18: pub bool,
@@ -51,11 +52,14 @@ fn main(
     iaca_pubkey_x: [u8; 32],
     iaca_pubkey_y: [u8; 32],
 ) {
-    // 1. Verify IACA public key matches the expected root
+    // 1. Require at least one claim to be proven (prevents empty proofs)
+    assert(prove_age_over_21 | prove_age_over_18 | prove_state);
+
+    // 2. Verify IACA public key matches the expected root
     let computed_iaca_root = compute_iaca_root(iaca_pubkey_x, iaca_pubkey_y);
     assert(computed_iaca_root == iaca_root);
 
-    // 2. Verify MSO signature with IACA public key
+    // 3. Verify MSO signature with IACA public key
     let mso_hash = sha256_digest(mso_bytes);
     let sig_valid = ecdsa_secp256r1::verify_signature(
         iaca_pubkey_x,
@@ -65,47 +69,51 @@ fn main(
     );
     assert(sig_valid);
 
-    // 3. Verify age_over_21 claim hashes to MSO digest
+    // 4. Verify age_over_21 claim hashes to MSO digest
     let age_over_21_hash = sha256_digest(age_over_21_claim_bytes);
     let expected_age_21_digest = extract_mso_digest(mso_bytes, MSO_DIGEST_0_OFFSET);
     assert(bytes32_eq(age_over_21_hash, expected_age_21_digest));
 
-    // 4. Verify age_over_18 claim hashes to MSO digest
+    // 5. Verify age_over_18 claim hashes to MSO digest
     let age_over_18_hash = sha256_digest(age_over_18_claim_bytes);
     let expected_age_18_digest = extract_mso_digest(mso_bytes, MSO_DIGEST_2_OFFSET);
     assert(bytes32_eq(age_over_18_hash, expected_age_18_digest));
 
-    // 5. Verify state claim hashes to MSO digest
+    // 6. Verify state claim hashes to MSO digest
     let state_claim_hash = sha256_digest(state_claim_bytes);
     let expected_state_digest = extract_mso_digest(mso_bytes, MSO_DIGEST_1_OFFSET);
     assert(bytes32_eq(state_claim_hash, expected_state_digest));
 
-    // 6. Extract and verify age_over_21
+    // 7. Extract and verify age_over_21
     let is_over_21 = extract_age_over_21(age_over_21_claim_bytes);
     if prove_age_over_21 {
         assert(is_over_21); // Must be true if proving
     }
 
-    // 7. Extract and verify age_over_18
+    // 8. Extract and verify age_over_18
     let is_over_18 = extract_age_over_18(age_over_18_claim_bytes);
     if prove_age_over_18 {
         assert(is_over_18); // Must be true if proving
     }
 
-    // 8. Extract and verify state code
+    // 9. Extract and verify state code
     let state_code = extract_state_code(state_claim_bytes);
     if prove_state {
         assert(state_code[0] == proven_state[0]);
         assert(state_code[1] == proven_state[1]);
     }
 
-    // 9. Verify nullifier derivation
+    // 10. Verify nullifier derivation
     let computed_nullifier = compute_nullifier(document_number, event_id, iaca_root);
     assert(computed_nullifier == nullifier);
 
-    // 10. Check MSO has not expired
+    // 11. Verify address binding (front-running protection)
+    let computed_binding = compute_address_binding(computed_nullifier, bound_address);
+    assert(computed_binding == address_binding);
+
+    // 12. Check MSO has not expired
+    // Note: Verifier contract must validate proof_date is within acceptable range of block.timestamp
     let mso_expiry = extract_mso_valid_until(mso_bytes);
-    let proof_date = timestamp_to_yyyymmdd(proof_timestamp);
     assert(mso_expiry >= proof_date); // MSO must not be expired at proof time
 }
 
@@ -434,4 +442,31 @@ fn test_california_full_claim_verification() {
     assert(is_over_21 == true);
     assert(state_code[0] == 67); // 'C'
     assert(state_code[1] == 65); // 'A'
+}
+
+#[test]
+fn test_compute_public_inputs() {
+    // This test computes the expected public input values for the Prover.toml fixture
+    // Run with: nargo test --show-output test_compute_public_inputs
+
+    // IACA pubkey from Prover.toml
+    let iaca_pubkey_x: [u8; 32] = [80, 170, 21, 63, 198, 72, 97, 140, 175, 109, 44, 82, 230, 98, 44, 251, 40, 142, 122, 128, 93, 50, 236, 8, 243, 158, 158, 193, 195, 188, 17, 63];
+    let iaca_pubkey_y: [u8; 32] = [110, 176, 7, 218, 49, 186, 18, 147, 230, 72, 74, 17, 55, 122, 191, 68, 114, 76, 196, 247, 203, 210, 114, 191, 156, 195, 169, 21, 42, 129, 171, 194];
+
+    // Document number from Prover.toml
+    let document_number: [u8; 32] = [200, 43, 159, 93, 29, 59, 149, 11, 110, 1, 222, 32, 222, 172, 53, 199, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+    // event_id and bound_address from Prover.toml
+    let event_id: Field = 0x1;
+    let bound_address: Field = 0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045;
+
+    // Compute values
+    let iaca_root = compute_iaca_root(iaca_pubkey_x, iaca_pubkey_y);
+    let nullifier = compute_nullifier(document_number, event_id, iaca_root);
+    let address_binding = compute_address_binding(nullifier, bound_address);
+
+    // Print them out (visible with --show-output)
+    println(f"iaca_root = {iaca_root}");
+    println(f"nullifier = {nullifier}");
+    println(f"address_binding = {address_binding}");
 }

@@ -11,5 +11,5 @@ interface IHonkVerifier {
     function verify(
         bytes calldata proof,
         bytes32[] calldata publicInputs
-    ) external returns (bool);
+    ) external view returns (bool);
 }
