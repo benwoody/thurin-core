@@ -2,6 +2,8 @@
 
 Solidity smart contracts for Thurin identity verification.
 
+**Deployed on Ethereum mainnet only.**
+
 ## Overview
 
 Thurin uses a three-contract architecture:
@@ -28,7 +30,7 @@ interface IThurinSBT {
     // Check if nullifier has been used
     function nullifierUsed(bytes32 nullifier) external view returns (bool);
 
-    // Get current mint price (tiered)
+    // Get current mint price in ETH (from $5 USD via Chainlink)
     function getMintPrice() external view returns (uint256);
 
     // Mint SBT with ZK proof
@@ -48,13 +50,9 @@ interface IThurinSBT {
 }
 ```
 
-### Pricing Tiers
+### Pricing
 
-| Supply | Price | Tier |
-|--------|-------|------|
-| 0-999 | $1 (0.0003 ETH) | OG |
-| 1,000-9,999 | $2 (0.0006 ETH) | Early |
-| 10,000+ | $5 (0.0015 ETH) | Standard |
+Flat **$5 USD** per mint, paid in ETH. Price calculated via Chainlink ETH/USD oracle.
 
 ### Referral System
 
@@ -212,12 +210,19 @@ forge script script/Deploy.s.sol \
 - HonkVerifier exceeds EIP-170 (24KB limit) at 24641 bytes
 - `--timestamp` should match proof timestamp (proofs expire after 1 hour)
 
-## Testnet Deployment
+## Deployment
 
 ```bash
-# Base Sepolia
+# Sepolia (testnet)
+PRICE_FEED=0x694AA1769357215DE4FAC081bf1f309aDC325306 \
 forge script script/Deploy.s.sol \
-  --rpc-url $BASE_SEPOLIA_RPC \
+  --rpc-url $SEPOLIA_RPC \
+  --broadcast \
+  --verify
+
+# Ethereum Mainnet (production)
+forge script script/Deploy.s.sol \
+  --rpc-url $MAINNET_RPC \
   --broadcast \
   --verify
 ```
@@ -261,13 +266,13 @@ cp target/proof/proof ../contracts/test/fixtures/proof.bin
 
 ## Contract Addresses
 
-### Base Sepolia (Testnet)
+### Sepolia (Testnet)
 
 ```
 TBD - not yet deployed
 ```
 
-### Base Mainnet
+### Ethereum Mainnet
 
 ```
 TBD - not yet deployed
