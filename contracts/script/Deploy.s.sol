@@ -13,12 +13,11 @@ contract DeployScript is Script {
     address constant SEPOLIA_PRICE_FEED = 0x694AA1769357215DE4FAC081bf1f309aDC325306;
 
     function run() external {
-        uint256 deployerPrivateKey = vm.envOr("PRIVATE_KEY", uint256(0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80));
+        // Get price feed address (default to Sepolia for safety, override with env var)
+        address priceFeed = vm.envOr("PRICE_FEED", SEPOLIA_PRICE_FEED);
 
-        // Get price feed address (default to mainnet, can override with env var)
-        address priceFeed = vm.envOr("PRICE_FEED", MAINNET_PRICE_FEED);
-
-        vm.startBroadcast(deployerPrivateKey);
+        // Use --account flag or --private-key, Forge injects the signer
+        vm.startBroadcast();
 
         // Deploy HonkVerifier (auto-generated ZK verifier)
         HonkVerifier honkVerifier = new HonkVerifier();
@@ -51,7 +50,7 @@ contract DeployScript is Script {
         console.log("ThurinSBT:", address(sbt));
         console.log("ThurinVerifier:", address(verifier));
         console.log("ThurinPoints:", address(points));
-        console.log("Owner:", vm.addr(deployerPrivateKey));
+        console.log("Owner:", sbt.owner());
         console.log("Price Feed:", priceFeed);
         console.log("");
         console.log("Pricing (USD):");
