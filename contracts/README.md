@@ -269,7 +269,10 @@ cp target/proof/proof ../contracts/test/fixtures/proof.bin
 ### Sepolia (Testnet)
 
 ```
-TBD - not yet deployed
+HonkVerifier:   0x65A8BEF0A58Ec557F77BE5Dd8A8dBE039159eD0d
+ThurinSBT:      0x03812ef2AEF6666c14ce23EfDbF55bd4662BFbDf
+ThurinVerifier: 0xee3312904bcf44ec69617c48118e530fEd0e5810
+ThurinPoints:   0x8727531a2906b12474f67EC775E22741dEC188fd
 ```
 
 ### Ethereum Mainnet
