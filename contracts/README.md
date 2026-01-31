@@ -273,6 +273,40 @@ TBD - not yet deployed
 TBD - not yet deployed
 ```
 
+## TODO
+
+### Wallet Migration (Self-Burn)
+
+Currently, if a user wants to change the wallet address associated with their SBT, they're stuck:
+- SBT is soulbound (can't transfer)
+- Nullifier is used (can't mint new one to different wallet)
+
+**Proposed solution:** Add a `burn()` function that clears the nullifier:
+
+```solidity
+mapping(uint256 => bytes32) public tokenNullifier;
+
+function burn() external {
+    uint256 tokenId = userTokenId[msg.sender];
+    require(_ownerOf(tokenId) == msg.sender, "Not owner");
+
+    bytes32 nullifier = tokenNullifier[tokenId];
+    nullifierUsed[nullifier] = false;  // Re-enable for re-mint
+
+    delete userTokenId[msg.sender];
+    _burn(tokenId);
+}
+```
+
+This allows:
+1. User burns SBT from old wallet
+2. Nullifier is freed
+3. User mints new SBT to new wallet with same mDL
+
+**Tradeoff:** Requires access to old wallet. If wallet is completely lost, user is locked out. This is acceptable (similar to losing a hardware wallet).
+
+**Note:** Need to store `tokenNullifier` mapping at mint time for this to work.
+
 ## License
 
 Apache-2.0

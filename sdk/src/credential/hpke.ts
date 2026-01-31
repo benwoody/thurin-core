@@ -57,6 +57,11 @@ export interface EncryptedCredentialDocument {
 /**
  * Create an HPKE session for credential requests
  * Returns the session context and encryption info to send to wallet
+ *
+ * The encryptionInfo format follows the "dcapi" protocol:
+ * ["dcapi", { nonce: bytes, recipientPublicKey: COSE_Key }]
+ *
+ * COSE_Key for P-256: { 1: 2 (EC2), -1: 1 (P-256), -2: x, -3: y }
  */
 export async function createHPKESession(origin: string): Promise<{
   session: HPKESession;
@@ -69,18 +74,34 @@ export async function createHPKESession(origin: string): Promise<{
     ['deriveBits']
   );
 
-  // Export public key as raw bytes
+  // Export public key as raw bytes (65 bytes: 0x04 prefix + 32 byte x + 32 byte y)
   const publicKeyRaw = await crypto.subtle.exportKey('raw', keyPair.publicKey);
   const publicKeyBytes = new Uint8Array(publicKeyRaw);
 
-  // Generate nonce (12 bytes for AES-GCM compatibility)
-  const nonce = crypto.getRandomValues(new Uint8Array(12));
+  // Generate nonce (16 bytes per ISO 18013-7 dcapi format)
+  const nonce = crypto.getRandomValues(new Uint8Array(16));
 
-  // Build EncryptionInfo per ISO 18013-7
-  const encryptionInfo = encode({
-    publicKey: publicKeyBytes,
-    nonce: nonce,
-  });
+  // Extract x and y coordinates from uncompressed public key
+  const x = publicKeyBytes.slice(1, 33); // Skip 0x04 prefix
+  const y = publicKeyBytes.slice(33, 65);
+
+  // Build COSE_Key with integer keys (Map required for CBOR integer keys)
+  // 1 = kty (2 = EC2), -1 = crv (1 = P-256), -2 = x, -3 = y
+  const coseKey = new Map<number, unknown>();
+  coseKey.set(1, 2); // kty: EC2
+  coseKey.set(-1, 1); // crv: P-256
+  coseKey.set(-2, x); // x coordinate
+  coseKey.set(-3, y); // y coordinate
+
+  // Build encryptionInfo per ISO 18013-7 dcapi format
+  // Structure: ["dcapi", { nonce, recipientPublicKey: COSE_Key }]
+  const encryptionInfo = encode([
+    'dcapi',
+    {
+      nonce: nonce,
+      recipientPublicKey: coseKey,
+    },
+  ]);
 
   return {
     session: {

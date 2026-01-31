@@ -75,24 +75,115 @@ function buildNameSpaces(claims: ClaimType[]): Record<string, boolean> {
 }
 
 /**
+ * Wrap CBOR bytes in Tag 24 (encoded CBOR data item)
+ * Tag 24 indicates the byte string contains CBOR-encoded data
+ *
+ * CBOR encoding:
+ * - Tag 24 = 0xd8 0x18 (2-byte tag header for tag 24)
+ * - Followed by bstr header + bytes
+ */
+function wrapInTag24(bytes: Uint8Array): Uint8Array {
+  const len = bytes.length;
+
+  // CBOR bstr length encoding varies by size
+  if (len < 24) {
+    // Tiny: 0x40 + len (single byte header)
+    const tagged = new Uint8Array(3 + len);
+    tagged[0] = 0xd8; // Tag follows (1 byte tag number)
+    tagged[1] = 0x18; // Tag 24
+    tagged[2] = 0x40 + len; // bstr(len) where len < 24
+    tagged.set(bytes, 3);
+    return tagged;
+  } else if (len < 256) {
+    // Small: 0x58 + 1 byte length
+    const tagged = new Uint8Array(4 + len);
+    tagged[0] = 0xd8;
+    tagged[1] = 0x18;
+    tagged[2] = 0x58; // bstr with 1-byte length
+    tagged[3] = len;
+    tagged.set(bytes, 4);
+    return tagged;
+  } else {
+    // Medium: 0x59 + 2 byte length (big-endian)
+    const tagged = new Uint8Array(5 + len);
+    tagged[0] = 0xd8;
+    tagged[1] = 0x18;
+    tagged[2] = 0x59; // bstr with 2-byte length
+    tagged[3] = (len >> 8) & 0xff;
+    tagged[4] = len & 0xff;
+    tagged.set(bytes, 5);
+    return tagged;
+  }
+}
+
+/**
  * Build CBOR-encoded DeviceRequest per ISO 18013-7
+ *
+ * Structure:
+ * DeviceRequest = {
+ *   version: "1.0",
+ *   docRequests: [DocRequest]
+ * }
+ * DocRequest = {
+ *   itemsRequest: #6.24(bstr .cbor ItemsRequest)  // Tag 24 wrapped
+ * }
+ * ItemsRequest = {
+ *   docType: tstr,
+ *   nameSpaces: { namespace: { element: intent-to-retain } }
+ * }
  */
 function buildDeviceRequest(claims: ClaimType[]): Uint8Array {
   const nameSpaces = buildNameSpaces(claims);
 
   // Build ItemsRequest per ISO 18013-5 clause 8.3.2.1.2.1
-  const itemsRequest = encode({
+  const itemsRequest = {
     docType: 'org.iso.18013.5.1.mDL',
-    nameSpaces: encode({
-      'org.iso.18013.5.1': encode(nameSpaces),
-    }),
-  });
+    nameSpaces: {
+      'org.iso.18013.5.1': nameSpaces,
+    },
+  };
 
-  // Build DeviceRequest per ISO 18013-7
-  return encode({
-    version: '1.0',
-    docRequests: [{ itemsRequest }],
-  });
+  // Encode itemsRequest to CBOR bytes
+  const itemsRequestBytes = encode(itemsRequest);
+
+  // Wrap in Tag 24 (required by ISO 18013-7)
+  const taggedItemsRequest = wrapInTag24(itemsRequestBytes);
+
+  // Build DocRequest map manually to include the tagged bytes
+  // Structure: { "itemsRequest": tagged_bytes }
+  // Map(1) = 0xa1, then text key, then the raw tagged bytes
+  const keyBytes = new TextEncoder().encode('itemsRequest');
+  const docReqMap = new Uint8Array(2 + keyBytes.length + taggedItemsRequest.length);
+  docReqMap[0] = 0xa1; // map(1)
+  docReqMap[1] = 0x60 + keyBytes.length; // text(12) - "itemsRequest" is 12 chars
+  docReqMap.set(keyBytes, 2);
+  docReqMap.set(taggedItemsRequest, 2 + keyBytes.length);
+
+  // Build DeviceRequest manually to include raw docReqMap
+  // Structure: { "version": "1.0", "docRequests": [docReqMap] }
+  const versionKey = new TextEncoder().encode('version');
+  const versionValue = encode('1.0');
+  const docRequestsKey = new TextEncoder().encode('docRequests');
+
+  const parts: Uint8Array[] = [
+    new Uint8Array([0xa2]), // map(2)
+    new Uint8Array([0x60 + versionKey.length, ...versionKey]), // "version"
+    versionValue, // "1.0"
+    new Uint8Array([0x60 + docRequestsKey.length, ...docRequestsKey]), // "docRequests"
+    new Uint8Array([0x81]), // array(1)
+    docReqMap,
+  ];
+
+  // Concatenate all parts
+  const totalLength = parts.reduce((sum, p) => sum + p.length, 0);
+  const deviceRequest = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const part of parts) {
+    deviceRequest.set(part, offset);
+    offset += part.length;
+  }
+
+  return deviceRequest;
 }
 
 /**
@@ -141,6 +232,7 @@ export async function requestCredential(
     const { session, encryptionInfo } = await createHPKESession(origin);
 
     // Call the Digital Credentials API with org-iso-mdoc protocol
+    // Safari expects data as object with deviceRequest and encryptionInfo
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const credential = await (navigator.credentials as any).get({
       mediation: 'required',
