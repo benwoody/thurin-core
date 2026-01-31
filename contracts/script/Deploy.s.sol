@@ -8,8 +8,15 @@ import {ThurinVerifier} from "../src/ThurinVerifier.sol";
 import {ThurinPoints} from "../src/ThurinPoints.sol";
 
 contract DeployScript is Script {
+    // Chainlink ETH/USD price feed addresses
+    address constant MAINNET_PRICE_FEED = 0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419;
+    address constant SEPOLIA_PRICE_FEED = 0x694AA1769357215DE4FAC081bf1f309aDC325306;
+
     function run() external {
         uint256 deployerPrivateKey = vm.envOr("PRIVATE_KEY", uint256(0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80));
+
+        // Get price feed address (default to mainnet, can override with env var)
+        address priceFeed = vm.envOr("PRICE_FEED", MAINNET_PRICE_FEED);
 
         vm.startBroadcast(deployerPrivateKey);
 
@@ -18,7 +25,7 @@ contract DeployScript is Script {
         console.log("HonkVerifier deployed at:", address(honkVerifier));
 
         // Deploy ThurinSBT (soulbound token for verified humans)
-        ThurinSBT sbt = new ThurinSBT(address(honkVerifier));
+        ThurinSBT sbt = new ThurinSBT(address(honkVerifier), priceFeed);
         console.log("ThurinSBT deployed at:", address(sbt));
 
         // Deploy ThurinVerifier (dApp verification contract)
@@ -45,11 +52,10 @@ contract DeployScript is Script {
         console.log("ThurinVerifier:", address(verifier));
         console.log("ThurinPoints:", address(points));
         console.log("Owner:", vm.addr(deployerPrivateKey));
+        console.log("Price Feed:", priceFeed);
         console.log("");
-        console.log("Pricing:");
-        console.log("  OG (first 500):", sbt.OG_PRICE(), "wei (~$2)");
-        console.log("  KindaCool (500-1500):", sbt.KINDA_COOL_PRICE(), "wei (~$3.33)");
-        console.log("  Standard (1500+):", sbt.mintPrice(), "wei (~$5)");
-        console.log("  Renewal:", sbt.renewalPrice(), "wei (~$5)");
+        console.log("Pricing (USD):");
+        console.log("  Mint:", sbt.mintPriceUSD() / 1e8, "USD");
+        console.log("  Renewal:", sbt.renewalPriceUSD() / 1e8, "USD");
     }
 }

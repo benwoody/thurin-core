@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {ThurinVerifier} from "../src/ThurinVerifier.sol";
 import {ThurinSBT} from "../src/ThurinSBT.sol";
 import {IHonkVerifier} from "../src/interfaces/IHonkVerifier.sol";
+import {MockPriceFeed} from "./mocks/MockPriceFeed.sol";
 
 contract MockHonkVerifier is IHonkVerifier {
     bool public shouldVerify = true;
@@ -49,6 +50,7 @@ contract ThurinVerifierTest is Test {
     ThurinVerifier public verifier;
     ThurinSBT public sbt;
     MockHonkVerifier public mockHonk;
+    MockPriceFeed public mockPriceFeed;
     MockDapp public dapp;
 
     address public alice = makeAddr("alice");
@@ -71,9 +73,10 @@ contract ThurinVerifierTest is Test {
         vm.warp(1704067200);
 
         mockHonk = new MockHonkVerifier();
+        mockPriceFeed = new MockPriceFeed(2000 * 1e8); // $2000/ETH
 
         vm.prank(owner);
-        sbt = new ThurinSBT(address(mockHonk));
+        sbt = new ThurinSBT(address(mockHonk), address(mockPriceFeed));
 
         vm.prank(owner);
         sbt.addIACARoot(IACA_ROOT_CA, "California");

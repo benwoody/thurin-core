@@ -6,12 +6,14 @@ import {Ownable2Step, Ownable} from "@openzeppelin/contracts/access/Ownable2Step
 import {Base64} from "@openzeppelin/contracts/utils/Base64.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 import {IHonkVerifier} from "./interfaces/IHonkVerifier.sol";
+import {IAggregatorV3} from "./interfaces/IAggregatorV3.sol";
 
 /// @title ThurinSBT
 /// @notice Soulbound token for verified mDL holders
 /// @dev Non-transferable ERC721 with ZK proof verification at mint
 contract ThurinSBT is ERC721, Ownable2Step {
     IHonkVerifier public immutable honkVerifier;
+    IAggregatorV3 public immutable priceFeed;
 
     // Token data
     uint256 private _tokenIdCounter;
@@ -26,17 +28,10 @@ contract ThurinSBT is ERC721, Ownable2Step {
     mapping(bytes32 => bool) public trustedIACARoots;
     mapping(bytes32 => string) public iacaStateNames;
 
-    // Pricing (in wei)
-    uint256 public mintPrice = 0.0015 ether; // ~$5 at $3333/ETH
-    uint256 public renewalPrice = 0.0015 ether; // ~$5 flat for all
-    uint256 public constant OG_PRICE = 0.0006 ether; // ~$2
-    uint256 public constant KINDA_COOL_PRICE = 0.001 ether; // ~$3.33
-    uint256 public constant OG_SUPPLY = 500;
-    uint256 public constant KINDA_COOL_SUPPLY = 1500;
-
-    // Tier tracking (for art/metadata)
-    enum Tier { OG, KindaCool, Standard }
-    mapping(uint256 => Tier) public tokenTier;
+    // Pricing (USD with 8 decimals, matching Chainlink)
+    uint256 public mintPriceUSD = 5 * 1e8; // $5
+    uint256 public renewalPriceUSD = 5 * 1e8; // $5
+    uint256 public constant PRICE_STALENESS_THRESHOLD = 1 hours;
 
     // Referrals
     mapping(uint256 => uint256) public referralCount;
@@ -60,8 +55,8 @@ contract ThurinSBT is ERC721, Ownable2Step {
     );
     event IACARootAdded(bytes32 indexed root, string stateName);
     event IACARootRemoved(bytes32 indexed root);
-    event MintPriceUpdated(uint256 oldPrice, uint256 newPrice);
-    event RenewalPriceUpdated(uint256 oldPrice, uint256 newPrice);
+    event MintPriceUpdated(uint256 oldPriceUSD, uint256 newPriceUSD);
+    event RenewalPriceUpdated(uint256 oldPriceUSD, uint256 newPriceUSD);
     event ValidityPeriodUpdated(uint256 oldPeriod, uint256 newPeriod);
     event Renewed(address indexed user, uint256 indexed tokenId);
     event Burned(address indexed user, uint256 indexed tokenId);
@@ -79,6 +74,8 @@ contract ThurinSBT is ERC721, Ownable2Step {
     error WithdrawFailed();
     error NoSBTToRenew();
     error NoSBTToBurn();
+    error StalePrice();
+    error InvalidPrice();
 
     // Struct to reduce stack depth in mint/renew
     struct ProofParams {
@@ -93,8 +90,12 @@ contract ThurinSBT is ERC721, Ownable2Step {
         bytes2 provenState;
     }
 
-    constructor(address _honkVerifier) ERC721("Thurin SBT", "THURIN") Ownable(msg.sender) {
+    constructor(
+        address _honkVerifier,
+        address _priceFeed
+    ) ERC721("Thurin SBT", "THURIN") Ownable(msg.sender) {
         honkVerifier = IHonkVerifier(_honkVerifier);
+        priceFeed = IAggregatorV3(_priceFeed);
     }
 
     /// @notice Convert timestamp to YYYYMMDD format
@@ -112,20 +113,29 @@ contract ThurinSBT is ERC721, Ownable2Step {
         return uint32(year * 10000 + month * 100 + day);
     }
 
-    /// @notice Get current mint price based on supply tier
-    function getMintPrice() public view returns (uint256) {
-        uint256 supply = totalSupply();
-        if (supply < OG_SUPPLY) return OG_PRICE;
-        if (supply < KINDA_COOL_SUPPLY) return KINDA_COOL_PRICE;
-        return mintPrice;
+    /// @notice Get current ETH/USD price from Chainlink (8 decimals)
+    function getETHPrice() public view returns (uint256) {
+        (
+            ,
+            int256 price,
+            ,
+            uint256 updatedAt,
+        ) = priceFeed.latestRoundData();
+        if (price <= 0) revert InvalidPrice();
+        if (block.timestamp - updatedAt > PRICE_STALENESS_THRESHOLD) revert StalePrice();
+        return uint256(price);
     }
 
-    /// @notice Get current tier based on supply
-    function getCurrentTier() public view returns (Tier) {
-        uint256 supply = totalSupply();
-        if (supply < OG_SUPPLY) return Tier.OG;
-        if (supply < KINDA_COOL_SUPPLY) return Tier.KindaCool;
-        return Tier.Standard;
+    /// @notice Get current mint price in ETH (wei)
+    function getMintPrice() public view returns (uint256) {
+        uint256 ethPrice = getETHPrice();
+        return (mintPriceUSD * 1e18) / ethPrice;
+    }
+
+    /// @notice Get current renewal price in ETH (wei)
+    function getRenewalPrice() public view returns (uint256) {
+        uint256 ethPrice = getETHPrice();
+        return (renewalPriceUSD * 1e18) / ethPrice;
     }
 
     /// @notice Get current supply (number of minted tokens)
@@ -216,7 +226,6 @@ contract ThurinSBT is ERC721, Ownable2Step {
         // Mint SBT
         uint256 tokenId = _tokenIdCounter++;
         tokenNullifier[tokenId] = nullifier; // Store for burn/re-mint
-        tokenTier[tokenId] = getCurrentTier();
         _safeMint(msg.sender, tokenId);
 
         tokenMintTimestamp[tokenId] = block.timestamp;
@@ -273,23 +282,7 @@ contract ThurinSBT is ERC721, Ownable2Step {
     function tokenURI(uint256 tokenId) public view override returns (string memory) {
         _requireOwned(tokenId);
 
-        // Get checkmark color based on tier
-        string memory checkColor;
-        string memory tierName;
-        Tier tier = tokenTier[tokenId];
-
-        if (tier == Tier.OG) {
-            checkColor = "#b76e79"; // Rose Gold
-            tierName = "OG";
-        } else if (tier == Tier.KindaCool) {
-            checkColor = "#f7e7ce"; // Champagne
-            tierName = "KindaCool";
-        } else {
-            checkColor = "#cd7f32"; // Bronze
-            tierName = "Standard";
-        }
-
-        // Build SVG
+        // Build SVG (matches logo-icon-verified.svg)
         string memory svg = string(
             abi.encodePacked(
                 '<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">',
@@ -298,9 +291,7 @@ contract ThurinSBT is ERC721, Ownable2Step {
                 '<path d="M33 75 Q33 35 50 35 Q67 35 67 52" fill="none" stroke="#7c9a3e" stroke-width="4" stroke-linecap="round"/>',
                 '<path d="M41 70 Q41 45 50 45 Q59 45 59 55" fill="none" stroke="#c9a227" stroke-width="4" stroke-linecap="round"/>',
                 '<path d="M50 65 L50 53" fill="none" stroke="#c9a227" stroke-width="4" stroke-linecap="round"/>',
-                '<path d="M50 73 L55 81 L75 59" fill="none" stroke="',
-                checkColor,
-                '" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>',
+                '<path d="M50 73 L55 81 L75 59" fill="none" stroke="#b87333" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>',
                 "</svg>"
             )
         );
@@ -310,9 +301,7 @@ contract ThurinSBT is ERC721, Ownable2Step {
             abi.encodePacked(
                 '{"name": "Thurin SBT #',
                 Strings.toString(tokenId),
-                '", "description": "Verified human - ',
-                tierName,
-                ' tier", "image": "data:image/svg+xml;base64,',
+                '", "description": "Verified human", "image": "data:image/svg+xml;base64,',
                 Base64.encode(bytes(svg)),
                 '"}'
             )
@@ -349,7 +338,7 @@ contract ThurinSBT is ERC721, Ownable2Step {
         if (balanceOf(msg.sender) == 0) revert NoSBTToRenew();
 
         // Check payment
-        uint256 price = renewalPrice;
+        uint256 price = getRenewalPrice();
         if (msg.value < price) revert InsufficientPayment();
 
         // Build params struct (reduces stack depth)
@@ -430,18 +419,18 @@ contract ThurinSBT is ERC721, Ownable2Step {
         emit IACARootRemoved(root);
     }
 
-    /// @notice Set the standard mint price (for post-early-adopter phase)
-    function setMintPrice(uint256 _mintPrice) external onlyOwner {
-        uint256 oldPrice = mintPrice;
-        mintPrice = _mintPrice;
-        emit MintPriceUpdated(oldPrice, _mintPrice);
+    /// @notice Set the mint price in USD (8 decimals, e.g., 5 * 1e8 = $5)
+    function setMintPriceUSD(uint256 _mintPriceUSD) external onlyOwner {
+        uint256 oldPrice = mintPriceUSD;
+        mintPriceUSD = _mintPriceUSD;
+        emit MintPriceUpdated(oldPrice, _mintPriceUSD);
     }
 
-    /// @notice Set the renewal price
-    function setRenewalPrice(uint256 _renewalPrice) external onlyOwner {
-        uint256 oldPrice = renewalPrice;
-        renewalPrice = _renewalPrice;
-        emit RenewalPriceUpdated(oldPrice, _renewalPrice);
+    /// @notice Set the renewal price in USD (8 decimals, e.g., 5 * 1e8 = $5)
+    function setRenewalPriceUSD(uint256 _renewalPriceUSD) external onlyOwner {
+        uint256 oldPrice = renewalPriceUSD;
+        renewalPriceUSD = _renewalPriceUSD;
+        emit RenewalPriceUpdated(oldPrice, _renewalPriceUSD);
     }
 
     /// @notice Set the validity period for SBTs

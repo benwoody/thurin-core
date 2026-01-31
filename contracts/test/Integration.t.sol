@@ -5,12 +5,14 @@ import {Test} from "forge-std/Test.sol";
 import {ThurinSBT} from "../src/ThurinSBT.sol";
 import {ThurinVerifier} from "../src/ThurinVerifier.sol";
 import {HonkVerifier} from "../src/HonkVerifier.sol";
+import {MockPriceFeed} from "./mocks/MockPriceFeed.sol";
 
 /// @notice Integration test using real ZK proof
 contract IntegrationTest is Test {
     ThurinSBT public sbt;
     ThurinVerifier public verifier;
     HonkVerifier public honkVerifier;
+    MockPriceFeed public mockPriceFeed;
 
     // Proof fixture values (generated from circuits/ with nargo + bb)
     bytes32 constant NULLIFIER = 0x239b635af19e20630ee162e69a859af142f4b1b4881f39821624b4cdbce4011d;
@@ -32,7 +34,8 @@ contract IntegrationTest is Test {
 
         // Deploy contracts
         honkVerifier = new HonkVerifier();
-        sbt = new ThurinSBT(address(honkVerifier));
+        mockPriceFeed = new MockPriceFeed(2000 * 1e8); // $2000/ETH
+        sbt = new ThurinSBT(address(honkVerifier), address(mockPriceFeed));
         verifier = new ThurinVerifier(address(honkVerifier), address(sbt));
 
         // Add trusted IACA root

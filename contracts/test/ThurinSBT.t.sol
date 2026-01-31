@@ -4,6 +4,7 @@ pragma solidity ^0.8.28;
 import {Test} from "forge-std/Test.sol";
 import {ThurinSBT} from "../src/ThurinSBT.sol";
 import {IHonkVerifier} from "../src/interfaces/IHonkVerifier.sol";
+import {MockPriceFeed} from "./mocks/MockPriceFeed.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 contract MockHonkVerifier is IHonkVerifier {
@@ -21,6 +22,7 @@ contract MockHonkVerifier is IHonkVerifier {
 contract ThurinSBTTest is Test {
     ThurinSBT public sbt;
     MockHonkVerifier public mockVerifier;
+    MockPriceFeed public mockPriceFeed;
 
     address public alice = makeAddr("alice");
     address public bob = makeAddr("bob");
@@ -33,6 +35,9 @@ contract ThurinSBTTest is Test {
     bytes public constant MOCK_PROOF = hex"deadbeef";
     uint256 public constant NO_REFERRER = type(uint256).max;
     uint32 public constant PROOF_DATE = 20240101; // Matches vm.warp(1704067200)
+
+    // ETH price: $2000 with 8 decimals
+    int256 public constant ETH_PRICE = 2000 * 1e8;
 
     bool public constant PROVE_AGE_21 = true;
     bool public constant PROVE_AGE_18 = true;
@@ -49,16 +54,18 @@ contract ThurinSBTTest is Test {
     event OwnershipTransferred(address indexed previousOwner, address indexed newOwner);
     event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
     event Renewed(address indexed user, uint256 indexed tokenId);
-    event RenewalPriceUpdated(uint256 oldPrice, uint256 newPrice);
+    event RenewalPriceUpdated(uint256 oldPriceUSD, uint256 newPriceUSD);
+    event MintPriceUpdated(uint256 oldPriceUSD, uint256 newPriceUSD);
     event Burned(address indexed user, uint256 indexed tokenId);
 
     function setUp() public {
         vm.warp(1704067200);
 
         mockVerifier = new MockHonkVerifier();
+        mockPriceFeed = new MockPriceFeed(ETH_PRICE);
 
         vm.prank(owner);
-        sbt = new ThurinSBT(address(mockVerifier));
+        sbt = new ThurinSBT(address(mockVerifier), address(mockPriceFeed));
 
         vm.prank(owner);
         sbt.addIACARoot(IACA_ROOT_CA, "California");
@@ -103,52 +110,47 @@ contract ThurinSBTTest is Test {
                             PRICING
     //////////////////////////////////////////////////////////////*/
 
-    function test_getMintPrice_returnsOGPrice() public view {
-        assertEq(sbt.getMintPrice(), sbt.OG_PRICE());
+    function test_getETHPrice_returnsPrice() public view {
+        assertEq(sbt.getETHPrice(), uint256(ETH_PRICE));
     }
 
-    function test_getMintPrice_returnsKindaCoolPrice() public {
-        // Mint 500 SBTs to reach KindaCool tier
-        for (uint256 i = 0; i < 500; i++) {
-            address user = makeAddr(string(abi.encodePacked("user", i)));
-            vm.deal(user, 1 ether);
-            bytes32 nullifier = keccak256(abi.encodePacked("nullifier", i));
-            _mintAs(user, nullifier, NO_REFERRER);
-        }
-
-        assertEq(sbt.getMintPrice(), sbt.KINDA_COOL_PRICE());
+    function test_getMintPrice_calculatesCorrectly() public view {
+        // $5 USD at $2000/ETH = 0.0025 ETH = 2.5e15 wei
+        uint256 expectedPrice = (5 * 1e8 * 1e18) / uint256(ETH_PRICE);
+        assertEq(sbt.getMintPrice(), expectedPrice);
+        assertEq(expectedPrice, 0.0025 ether);
     }
 
-    function test_getMintPrice_returnsStandardPrice() public {
-        // Mint 1500 SBTs to reach Standard tier
-        for (uint256 i = 0; i < 1500; i++) {
-            address user = makeAddr(string(abi.encodePacked("user", i)));
-            vm.deal(user, 1 ether);
-            bytes32 nullifier = keccak256(abi.encodePacked("nullifier", i));
-            _mintAs(user, nullifier, NO_REFERRER);
-        }
+    function test_getMintPrice_updatesWithETHPrice() public {
+        // Change ETH price to $4000
+        mockPriceFeed.setPrice(4000 * 1e8);
 
-        assertEq(sbt.getMintPrice(), sbt.mintPrice());
+        // $5 USD at $4000/ETH = 0.00125 ETH
+        uint256 expectedPrice = (5 * 1e8 * 1e18) / (4000 * 1e8);
+        assertEq(sbt.getMintPrice(), expectedPrice);
+        assertEq(expectedPrice, 0.00125 ether);
     }
 
-    function test_getCurrentTier_returnsCorrectTier() public {
-        assertEq(uint256(sbt.getCurrentTier()), uint256(ThurinSBT.Tier.OG));
+    function test_getETHPrice_revertsOnStalePrice() public {
+        // Set price updated at > 1 hour ago
+        mockPriceFeed.setUpdatedAt(block.timestamp - 2 hours);
 
-        // Mint to KindaCool
-        for (uint256 i = 0; i < 500; i++) {
-            address user = makeAddr(string(abi.encodePacked("user", i)));
-            vm.deal(user, 1 ether);
-            bytes32 nullifier = keccak256(abi.encodePacked("nullifier", i));
-            _mintAs(user, nullifier, NO_REFERRER);
-        }
-        assertEq(uint256(sbt.getCurrentTier()), uint256(ThurinSBT.Tier.KindaCool));
+        vm.expectRevert(ThurinSBT.StalePrice.selector);
+        sbt.getETHPrice();
     }
 
-    function test_mint_tracksTier() public {
-        bytes32 nullifier = keccak256("alice-nullifier");
-        uint256 tokenId = _mintAs(alice, nullifier, NO_REFERRER);
+    function test_getETHPrice_revertsOnInvalidPrice() public {
+        mockPriceFeed.setPrice(0);
 
-        assertEq(uint256(sbt.tokenTier(tokenId)), uint256(ThurinSBT.Tier.OG));
+        vm.expectRevert(ThurinSBT.InvalidPrice.selector);
+        sbt.getETHPrice();
+    }
+
+    function test_getETHPrice_revertsOnNegativePrice() public {
+        mockPriceFeed.setPrice(-100);
+
+        vm.expectRevert(ThurinSBT.InvalidPrice.selector);
+        sbt.getETHPrice();
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -172,7 +174,7 @@ contract ThurinSBTTest is Test {
 
     function test_mint_revertsWithInsufficientPayment() public {
         bytes32 nullifier = keccak256("alice-nullifier");
-        uint256 price = sbt.OG_PRICE();
+        uint256 price = sbt.getMintPrice();
 
         vm.prank(alice);
         vm.expectRevert(ThurinSBT.InsufficientPayment.selector);
@@ -200,7 +202,7 @@ contract ThurinSBTTest is Test {
     function test_mint_revertsWithUntrustedIACA() public {
         bytes32 nullifier = keccak256("alice-nullifier");
         bytes32 untrustedRoot = keccak256("untrusted");
-        uint256 price = sbt.OG_PRICE();
+        uint256 price = sbt.getMintPrice();
 
         vm.prank(alice);
         vm.expectRevert(ThurinSBT.UntrustedIACA.selector);
@@ -227,7 +229,7 @@ contract ThurinSBTTest is Test {
     function test_mint_revertsWithFutureTimestamp() public {
         bytes32 nullifier = keccak256("alice-nullifier");
         uint32 futureDate = 20240105; // 4 days in future (tolerance is 1 day)
-        uint256 price = sbt.OG_PRICE();
+        uint256 price = sbt.getMintPrice();
 
         vm.prank(alice);
         vm.expectRevert(ThurinSBT.ProofDateFromFuture.selector);
@@ -240,7 +242,7 @@ contract ThurinSBTTest is Test {
     function test_mint_revertsWithExpiredProof() public {
         bytes32 nullifier = keccak256("alice-nullifier");
         uint32 oldDate = 20231225; // A week before (tolerance is 1 day)
-        uint256 price = sbt.OG_PRICE();
+        uint256 price = sbt.getMintPrice();
 
         vm.prank(alice);
         vm.expectRevert(ThurinSBT.ProofDateTooOld.selector);
@@ -252,7 +254,7 @@ contract ThurinSBTTest is Test {
 
     function test_mint_revertsWithInvalidProof() public {
         bytes32 nullifier = keccak256("alice-nullifier");
-        uint256 price = sbt.OG_PRICE();
+        uint256 price = sbt.getMintPrice();
         mockVerifier.setShouldVerify(false);
 
         vm.prank(alice);
@@ -354,7 +356,7 @@ contract ThurinSBTTest is Test {
     //////////////////////////////////////////////////////////////*/
 
     function _renewAs(address user, bytes32 nullifier, uint32 proofDate) internal {
-        uint256 price = sbt.renewalPrice();
+        uint256 price = sbt.getRenewalPrice();
         vm.prank(user);
         sbt.renew{value: price}(
             MOCK_PROOF, nullifier, MOCK_ADDRESS_BINDING, proofDate, EVENT_ID, IACA_ROOT_CA,
@@ -370,6 +372,7 @@ contract ThurinSBTTest is Test {
         // With the approximate _timestampToYYYYMMDD formula:
         // dayOfYear = 301, month = 11, day = 2 -> 20241102
         vm.warp(block.timestamp + 300 days);
+        mockPriceFeed.setUpdatedAt(block.timestamp); // Refresh price feed timestamp
         uint256 oldExpiry = sbt.getExpiry(alice);
         uint32 renewDate = 20241102;
 
@@ -390,6 +393,7 @@ contract ThurinSBTTest is Test {
         // Same nullifier should work for renewal
         // With the approximate formula, 300 days = 20241102
         vm.warp(block.timestamp + 300 days);
+        mockPriceFeed.setUpdatedAt(block.timestamp); // Refresh price feed timestamp
         uint32 renewDate = 20241102;
         _renewAs(alice, nullifier, renewDate);
 
@@ -398,7 +402,7 @@ contract ThurinSBTTest is Test {
 
     function test_renew_revertsIfNoSBT() public {
         bytes32 nullifier = keccak256("alice-nullifier");
-        uint256 price = sbt.renewalPrice();
+        uint256 price = sbt.getRenewalPrice();
 
         vm.prank(alice);
         vm.expectRevert(ThurinSBT.NoSBTToRenew.selector);
@@ -412,7 +416,7 @@ contract ThurinSBTTest is Test {
         bytes32 nullifier = keccak256("alice-nullifier");
         _mintAs(alice, nullifier, NO_REFERRER);
 
-        uint256 price = sbt.renewalPrice();
+        uint256 price = sbt.getRenewalPrice();
         vm.prank(alice);
         vm.expectRevert(ThurinSBT.InsufficientPayment.selector);
         sbt.renew{value: price - 1}(
@@ -426,7 +430,7 @@ contract ThurinSBTTest is Test {
         _mintAs(alice, nullifier, NO_REFERRER);
 
         uint32 oldDate = 20231225; // A week before
-        uint256 price = sbt.renewalPrice();
+        uint256 price = sbt.getRenewalPrice();
 
         vm.prank(alice);
         vm.expectRevert(ThurinSBT.ProofDateTooOld.selector);
@@ -441,7 +445,7 @@ contract ThurinSBTTest is Test {
         _mintAs(alice, nullifier, NO_REFERRER);
 
         mockVerifier.setShouldVerify(false);
-        uint256 price = sbt.renewalPrice();
+        uint256 price = sbt.getRenewalPrice();
 
         vm.prank(alice);
         vm.expectRevert(ThurinSBT.InvalidProof.selector);
@@ -457,6 +461,7 @@ contract ThurinSBTTest is Test {
 
         // Let SBT expire (365 days + 1 = ~Jan 2025 = 20250102)
         vm.warp(block.timestamp + sbt.validityPeriod() + 1 days);
+        mockPriceFeed.setUpdatedAt(block.timestamp); // Refresh price feed timestamp
         assertFalse(sbt.isValid(alice));
         uint32 renewDate = 20250102;
 
@@ -609,13 +614,17 @@ contract ThurinSBTTest is Test {
         assertFalse(sbt.trustedIACARoots(IACA_ROOT_CA));
     }
 
-    function test_setMintPrice_updatesPrice() public {
-        uint256 newPrice = 0.01 ether;
+    function test_setMintPriceUSD_updatesPrice() public {
+        uint256 newPriceUSD = 10 * 1e8; // $10
 
         vm.prank(owner);
-        sbt.setMintPrice(newPrice);
+        vm.expectEmit(false, false, false, true);
+        emit MintPriceUpdated(5 * 1e8, newPriceUSD);
+        sbt.setMintPriceUSD(newPriceUSD);
 
-        assertEq(sbt.mintPrice(), newPrice);
+        assertEq(sbt.mintPriceUSD(), newPriceUSD);
+        // At $2000/ETH, $10 = 0.005 ETH
+        assertEq(sbt.getMintPrice(), 0.005 ether);
     }
 
     function test_setValidityPeriod_updatesPeriod() public {
@@ -627,16 +636,17 @@ contract ThurinSBTTest is Test {
         assertEq(sbt.validityPeriod(), newPeriod);
     }
 
-    function test_setRenewalPrice_updatesPrice() public {
-        uint256 oldPrice = sbt.renewalPrice();
-        uint256 newPrice = 0.002 ether;
+    function test_setRenewalPriceUSD_updatesPrice() public {
+        uint256 newPriceUSD = 10 * 1e8; // $10
 
         vm.prank(owner);
         vm.expectEmit(false, false, false, true);
-        emit RenewalPriceUpdated(oldPrice, newPrice);
-        sbt.setRenewalPrice(newPrice);
+        emit RenewalPriceUpdated(5 * 1e8, newPriceUSD);
+        sbt.setRenewalPriceUSD(newPriceUSD);
 
-        assertEq(sbt.renewalPrice(), newPrice);
+        assertEq(sbt.renewalPriceUSD(), newPriceUSD);
+        // At $2000/ETH, $10 = 0.005 ETH
+        assertEq(sbt.getRenewalPrice(), 0.005 ether);
     }
 
     function test_transferOwnership_transfersOwnership() public {
@@ -695,18 +705,13 @@ contract ThurinSBTTest is Test {
         sbt.tokenURI(999);
     }
 
-    function test_tokenURI_containsTierColor() public {
-        // Mint OG token
+    function test_tokenURI_containsValidSVG() public {
         bytes32 nullifier = keccak256("alice-nullifier");
-        uint256 tokenId = _mintAs(alice, nullifier, NO_REFERRER);
+        _mintAs(alice, nullifier, NO_REFERRER);
 
-        // Verify it's OG tier
-        assertEq(uint256(sbt.tokenTier(tokenId)), uint256(ThurinSBT.Tier.OG));
-
-        // Get URI and verify it contains Rose Gold color
-        string memory uri = sbt.tokenURI(tokenId);
+        string memory uri = sbt.tokenURI(0);
         assertTrue(bytes(uri).length > 0);
-        // The base64-encoded output will contain the color, verified by successful encoding
+        // The base64-encoded output contains the SVG, verified by successful encoding
     }
 
     function _startsWith(string memory str, string memory prefix) internal pure returns (bool) {

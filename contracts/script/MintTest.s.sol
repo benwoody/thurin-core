@@ -6,6 +6,7 @@ import {HonkVerifier} from "../src/HonkVerifier.sol";
 import {ThurinSBT} from "../src/ThurinSBT.sol";
 import {ThurinVerifier} from "../src/ThurinVerifier.sol";
 import {ThurinPoints} from "../src/ThurinPoints.sol";
+import {MockPriceFeed} from "../test/mocks/MockPriceFeed.sol";
 
 /// @notice Deploy + mint + verify in one script to demo full flow on Anvil
 contract MintTestScript is Script {
@@ -33,7 +34,10 @@ contract MintTestScript is Script {
         HonkVerifier honk = new HonkVerifier();
         console.log("HonkVerifier:", address(honk));
 
-        ThurinSBT sbt = new ThurinSBT(address(honk));
+        MockPriceFeed priceFeed = new MockPriceFeed(2000 * 1e8); // $2000/ETH for local testing
+        console.log("MockPriceFeed:", address(priceFeed));
+
+        ThurinSBT sbt = new ThurinSBT(address(honk), address(priceFeed));
         console.log("ThurinSBT:", address(sbt));
 
         ThurinVerifier verifier = new ThurinVerifier(address(honk), address(sbt));

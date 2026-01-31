@@ -6,6 +6,7 @@ import {ThurinPoints} from "../src/ThurinPoints.sol";
 import {ThurinSBT} from "../src/ThurinSBT.sol";
 import {ThurinVerifier} from "../src/ThurinVerifier.sol";
 import {IHonkVerifier} from "../src/interfaces/IHonkVerifier.sol";
+import {MockPriceFeed} from "./mocks/MockPriceFeed.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 contract MockHonkVerifier is IHonkVerifier {
@@ -42,6 +43,7 @@ contract ThurinPointsTest is Test {
     ThurinSBT public sbt;
     ThurinVerifier public verifier;
     MockHonkVerifier public mockHonk;
+    MockPriceFeed public mockPriceFeed;
     MockDapp public dapp1;
     MockDapp public dapp2;
 
@@ -62,9 +64,10 @@ contract ThurinPointsTest is Test {
         vm.warp(1704067200);
 
         mockHonk = new MockHonkVerifier();
+        mockPriceFeed = new MockPriceFeed(2000 * 1e8); // $2000/ETH
 
         vm.prank(owner);
-        sbt = new ThurinSBT(address(mockHonk));
+        sbt = new ThurinSBT(address(mockHonk), address(mockPriceFeed));
 
         vm.prank(owner);
         sbt.addIACARoot(IACA_ROOT, "California");
