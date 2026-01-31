@@ -20,6 +20,7 @@ contract ThurinSBT is ERC721, Ownable2Step {
 
     // Sybil resistance
     mapping(bytes32 => bool) public nullifierUsed;
+    mapping(uint256 => bytes32) public tokenNullifier; // For burn/re-mint
 
     // IACA roots
     mapping(bytes32 => bool) public trustedIACARoots;
@@ -63,6 +64,7 @@ contract ThurinSBT is ERC721, Ownable2Step {
     event RenewalPriceUpdated(uint256 oldPrice, uint256 newPrice);
     event ValidityPeriodUpdated(uint256 oldPeriod, uint256 newPeriod);
     event Renewed(address indexed user, uint256 indexed tokenId);
+    event Burned(address indexed user, uint256 indexed tokenId);
 
     // Errors
     error ProofDateFromFuture();
@@ -76,6 +78,7 @@ contract ThurinSBT is ERC721, Ownable2Step {
     error Soulbound();
     error WithdrawFailed();
     error NoSBTToRenew();
+    error NoSBTToBurn();
 
     // Struct to reduce stack depth in mint/renew
     struct ProofParams {
@@ -212,6 +215,7 @@ contract ThurinSBT is ERC721, Ownable2Step {
 
         // Mint SBT
         uint256 tokenId = _tokenIdCounter++;
+        tokenNullifier[tokenId] = nullifier; // Store for burn/re-mint
         tokenTier[tokenId] = getCurrentTier();
         _safeMint(msg.sender, tokenId);
 
@@ -376,6 +380,28 @@ contract ThurinSBT is ERC721, Ownable2Step {
             (bool success,) = payable(msg.sender).call{value: msg.value - price}("");
             if (!success) revert WithdrawFailed();
         }
+    }
+
+    /// @notice Burn your SBT and free the nullifier for re-minting to a new wallet
+    /// @dev Allows wallet migration by burning from old wallet and minting to new wallet
+    function burn() external {
+        // Must have an SBT
+        if (balanceOf(msg.sender) == 0) revert NoSBTToBurn();
+
+        uint256 tokenId = userTokenId[msg.sender];
+
+        // Free the nullifier so user can mint again
+        bytes32 nullifier = tokenNullifier[tokenId];
+        nullifierUsed[nullifier] = false;
+
+        // Clear user mappings
+        delete userTokenId[msg.sender];
+        delete tokenNullifier[tokenId];
+
+        // Burn the token
+        _burn(tokenId);
+
+        emit Burned(msg.sender, tokenId);
     }
 
     // Soulbound: disable transfers

@@ -50,6 +50,7 @@ contract ThurinSBTTest is Test {
     event OwnershipTransferStarted(address indexed previousOwner, address indexed newOwner);
     event Renewed(address indexed user, uint256 indexed tokenId);
     event RenewalPriceUpdated(uint256 oldPrice, uint256 newPrice);
+    event Burned(address indexed user, uint256 indexed tokenId);
 
     function setUp() public {
         vm.warp(1704067200);
@@ -484,6 +485,97 @@ contract ThurinSBTTest is Test {
         vm.prank(alice);
         vm.expectRevert(ThurinSBT.Soulbound.selector);
         sbt.safeTransferFrom(alice, bob, 0);
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                            BURN (WALLET MIGRATION)
+    //////////////////////////////////////////////////////////////*/
+
+    function test_burn_succeedsForOwner() public {
+        bytes32 nullifier = keccak256("alice-nullifier");
+        uint256 tokenId = _mintAs(alice, nullifier, NO_REFERRER);
+
+        // Verify initial state
+        assertEq(sbt.balanceOf(alice), 1);
+        assertTrue(sbt.nullifierUsed(nullifier));
+        assertEq(sbt.tokenNullifier(tokenId), nullifier);
+
+        // Burn
+        vm.prank(alice);
+        vm.expectEmit(true, true, false, true);
+        emit Burned(alice, tokenId);
+        sbt.burn();
+
+        // Verify post-burn state
+        assertEq(sbt.balanceOf(alice), 0);
+        assertFalse(sbt.nullifierUsed(nullifier)); // Nullifier freed
+        assertEq(sbt.tokenNullifier(tokenId), bytes32(0)); // Cleared
+        assertEq(sbt.userTokenId(alice), 0); // Cleared
+    }
+
+    function test_burn_revertsIfNoSBT() public {
+        vm.prank(alice);
+        vm.expectRevert(ThurinSBT.NoSBTToBurn.selector);
+        sbt.burn();
+    }
+
+    function test_burn_allowsRemintToNewWallet() public {
+        bytes32 nullifier = keccak256("alice-nullifier");
+
+        // Alice mints
+        _mintAs(alice, nullifier, NO_REFERRER);
+        assertEq(sbt.balanceOf(alice), 1);
+
+        // Alice burns
+        vm.prank(alice);
+        sbt.burn();
+        assertEq(sbt.balanceOf(alice), 0);
+
+        // Same nullifier can now be used by Bob (wallet migration)
+        uint256 bobTokenId = _mintAs(bob, nullifier, NO_REFERRER);
+        assertEq(sbt.balanceOf(bob), 1);
+        assertEq(sbt.tokenNullifier(bobTokenId), nullifier);
+    }
+
+    function test_burn_allowsRemintToSameWallet() public {
+        bytes32 nullifier = keccak256("alice-nullifier");
+
+        // Alice mints
+        _mintAs(alice, nullifier, NO_REFERRER);
+        uint256 firstTokenId = sbt.userTokenId(alice);
+
+        // Alice burns
+        vm.prank(alice);
+        sbt.burn();
+
+        // Alice can mint again with same nullifier
+        uint256 secondTokenId = _mintAs(alice, nullifier, NO_REFERRER);
+
+        // Different token ID (counter incremented)
+        assertGt(secondTokenId, firstTokenId);
+        assertEq(sbt.balanceOf(alice), 1);
+    }
+
+    function test_burn_clearsPointsNothing() public {
+        // Points should NOT be cleared on burn (earned legitimately)
+        bytes32 nullifier = keccak256("alice-nullifier");
+        _mintAs(alice, nullifier, NO_REFERRER);
+
+        uint256 pointsBefore = sbt.points(alice);
+        assertGt(pointsBefore, 0);
+
+        vm.prank(alice);
+        sbt.burn();
+
+        // Points still there
+        assertEq(sbt.points(alice), pointsBefore);
+    }
+
+    function test_tokenNullifier_storedOnMint() public {
+        bytes32 nullifier = keccak256("alice-nullifier");
+        uint256 tokenId = _mintAs(alice, nullifier, NO_REFERRER);
+
+        assertEq(sbt.tokenNullifier(tokenId), nullifier);
     }
 
     /*//////////////////////////////////////////////////////////////
