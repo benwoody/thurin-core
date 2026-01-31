@@ -17,6 +17,9 @@ broadcast/
 # OS
 .DS_Store
 
+# Reports
+reports/
+
 # IDE
 .idea/
 .vscode/
