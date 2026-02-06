@@ -314,7 +314,8 @@ export class Thurin {
       proof: result.proof,
       publicInputs: {
         nullifier: result.publicInputs.nullifier,
-        proofTimestamp: result.publicInputs.proofTimestamp,
+        addressBinding: result.publicInputs.addressBinding,
+        proofDate: result.publicInputs.proofDate,
         eventId: result.publicInputs.eventId,
         iacaRoot: result.publicInputs.iacaRoot,
         boundAddress: result.publicInputs.boundAddress,

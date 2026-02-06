@@ -16,7 +16,8 @@ const mockCircuit: CompiledCircuit = {
   abi: {
     parameters: [
       { name: 'nullifier', type: { kind: 'field' }, visibility: 'public' },
-      { name: 'proof_timestamp', type: { kind: 'field' }, visibility: 'public' },
+      { name: 'address_binding', type: { kind: 'field' }, visibility: 'public' },
+      { name: 'proof_date', type: { kind: 'integer' }, visibility: 'public' },
     ],
   },
   bytecode: 'H4sIAAAAAAAA/wvIL0pVSM7PS0nMS1dIyy9KUQQABwpnTRIAAAA=', // minimal valid base64
@@ -238,7 +239,9 @@ describe.skip('Prover Integration', () => {
     // Verify public inputs
     expect(result.publicInputs.nullifier).toBeDefined();
     expect(result.publicInputs.nullifier.startsWith('0x')).toBe(true);
-    expect(result.publicInputs.proofTimestamp).toBe(1704067200n);
+    expect(result.publicInputs.addressBinding).toBeDefined();
+    expect(result.publicInputs.addressBinding.startsWith('0x')).toBe(true);
+    expect(result.publicInputs.proofDate).toBe(20240101); // 1704067200 = Jan 1, 2024
     expect(result.publicInputs.eventId).toBeDefined();
     expect(result.publicInputs.iacaRoot).toBeDefined();
     expect(result.publicInputs.boundAddress).toBe('0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045');
@@ -249,5 +252,6 @@ describe.skip('Prover Integration', () => {
 
     console.log('Generated proof nullifier:', result.publicInputs.nullifier);
     console.log('Generated proof IACA root:', result.publicInputs.iacaRoot);
+    console.log('Generated proof address binding:', result.publicInputs.addressBinding);
   }, 120000); // 2 minute timeout for proof generation
 });

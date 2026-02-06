@@ -53,7 +53,8 @@ export class ThurinVerifier {
         user,
         proof.proof,
         publicInputs.nullifier,
-        publicInputs.proofTimestamp,
+        publicInputs.addressBinding,
+        publicInputs.proofDate,
         publicInputs.eventId,
         publicInputs.iacaRoot,
         publicInputs.proveAgeOver21,
@@ -107,13 +108,13 @@ export class ThurinVerifier {
   }
 
   /**
-   * Get the proof validity period (in seconds)
+   * Get the proof date tolerance (in days)
    */
-  async getProofValidityPeriod(): Promise<bigint> {
+  async getProofDateToleranceDays(): Promise<bigint> {
     const result = await this.publicClient.readContract({
       address: this.address,
       abi: THURIN_VERIFIER_ABI,
-      functionName: 'PROOF_VALIDITY_PERIOD',
+      functionName: 'PROOF_DATE_TOLERANCE_DAYS',
     });
     return result as bigint;
   }

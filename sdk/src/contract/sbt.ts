@@ -18,7 +18,8 @@ export const NO_REFERRER = BigInt(
  */
 export interface ThurinPublicInputs {
   nullifier: Hex;
-  proofTimestamp: bigint;
+  addressBinding: Hex;
+  proofDate: number;
   eventId: Hex;
   iacaRoot: Hex;
   boundAddress: Address;
@@ -95,7 +96,8 @@ export class ThurinSBT {
       args: [
         proof.proof,
         publicInputs.nullifier,
-        publicInputs.proofTimestamp,
+        publicInputs.addressBinding,
+        publicInputs.proofDate,
         publicInputs.eventId,
         publicInputs.iacaRoot,
         publicInputs.proveAgeOver21,
@@ -268,64 +270,71 @@ export class ThurinSBT {
   }
 
   /**
-   * Get pricing tier info
+   * Renew an existing SBT with a fresh ZK proof
+   * @returns Transaction hash
    */
-  async getPricingInfo(): Promise<{
-    ogPrice: bigint;
-    ogSupply: bigint;
-    earlyPrice: bigint;
-    earlySupply: bigint;
-    standardPrice: bigint;
-    currentPrice: bigint;
-    totalSupply: bigint;
-  }> {
-    const [
-      ogPrice,
-      ogSupply,
-      earlyPrice,
-      earlySupply,
-      standardPrice,
-      currentPrice,
-      supply,
-    ] = await Promise.all([
-      this.publicClient.readContract({
-        address: this.address,
-        abi: THURIN_SBT_ABI,
-        functionName: 'OG_PRICE',
-      }),
-      this.publicClient.readContract({
-        address: this.address,
-        abi: THURIN_SBT_ABI,
-        functionName: 'OG_SUPPLY',
-      }),
-      this.publicClient.readContract({
-        address: this.address,
-        abi: THURIN_SBT_ABI,
-        functionName: 'EARLY_PRICE',
-      }),
-      this.publicClient.readContract({
-        address: this.address,
-        abi: THURIN_SBT_ABI,
-        functionName: 'EARLY_SUPPLY',
-      }),
-      this.publicClient.readContract({
-        address: this.address,
-        abi: THURIN_SBT_ABI,
-        functionName: 'mintPrice',
-      }),
-      this.getMintPrice(),
-      this.totalSupply(),
-    ]);
+  async renew(proof: ThurinProof, options?: { gas?: bigint }): Promise<Hash> {
+    if (!this.walletClient) {
+      throw new Error('WalletClient required for write operations');
+    }
 
-    return {
-      ogPrice: ogPrice as bigint,
-      ogSupply: ogSupply as bigint,
-      earlyPrice: earlyPrice as bigint,
-      earlySupply: earlySupply as bigint,
-      standardPrice: standardPrice as bigint,
-      currentPrice,
-      totalSupply: supply,
-    };
+    const { publicInputs } = proof;
+    const stateBytes = stateToBytes2(publicInputs.provenState);
+    const price = await this.getRenewalPrice();
+
+    const hash = await this.walletClient.writeContract({
+      address: this.address,
+      abi: THURIN_SBT_ABI,
+      functionName: 'renew',
+      args: [
+        proof.proof,
+        publicInputs.nullifier,
+        publicInputs.addressBinding,
+        publicInputs.proofDate,
+        publicInputs.eventId,
+        publicInputs.iacaRoot,
+        publicInputs.proveAgeOver21,
+        publicInputs.proveAgeOver18,
+        publicInputs.proveState,
+        stateBytes,
+      ],
+      value: price,
+      gas: options?.gas,
+    });
+
+    return hash;
+  }
+
+  /**
+   * Burn your SBT (frees nullifier for re-minting)
+   * @returns Transaction hash
+   */
+  async burn(options?: { gas?: bigint }): Promise<Hash> {
+    if (!this.walletClient) {
+      throw new Error('WalletClient required for write operations');
+    }
+
+    const hash = await this.walletClient.writeContract({
+      address: this.address,
+      abi: THURIN_SBT_ABI,
+      functionName: 'burn',
+      args: [],
+      gas: options?.gas,
+    });
+
+    return hash;
+  }
+
+  /**
+   * Get the current renewal price
+   */
+  async getRenewalPrice(): Promise<bigint> {
+    const result = await this.publicClient.readContract({
+      address: this.address,
+      abi: THURIN_SBT_ABI,
+      functionName: 'getRenewalPrice',
+    });
+    return result as bigint;
   }
 }
 

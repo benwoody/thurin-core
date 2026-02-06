@@ -31,7 +31,9 @@ const ANVIL_PRIVATE_KEY =
 const PROOF_FIXTURE = {
   nullifier:
     '0x1ca63d2c7aa6f7fd4b51b6e0fad8d2c4aa37f5ed994521ada76c1d39fdee89df' as Hex,
-  proofTimestamp: 1704067200n, // Jan 1, 2024
+  addressBinding:
+    '0x0000000000000000000000000000000000000000000000000000000000000000' as Hex, // placeholder - compute with real fixture
+  proofDate: 20240101, // Jan 1, 2024 in YYYYMMDD
   eventId: '0x0000000000000000000000000000000000000000000000000000000000000001' as Hex,
   iacaRoot:
     '0x2417f53cd9ead423f21f71a17726d2de8e1642521d5e8fa0bc4593240d7f2de6' as Hex,
@@ -165,7 +167,8 @@ describe.skip('E2E: Anvil Integration', () => {
       proof: proofBytes,
       publicInputs: {
         nullifier: PROOF_FIXTURE.nullifier,
-        proofTimestamp: PROOF_FIXTURE.proofTimestamp,
+        addressBinding: PROOF_FIXTURE.addressBinding,
+        proofDate: PROOF_FIXTURE.proofDate,
         eventId: PROOF_FIXTURE.eventId,
         iacaRoot: PROOF_FIXTURE.iacaRoot,
         boundAddress: PROOF_FIXTURE.boundAddress,

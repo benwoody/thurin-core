@@ -63,7 +63,8 @@ export interface GeneratedProof {
   /** Public inputs */
   publicInputs: {
     nullifier: Hex;
-    proofTimestamp: bigint;
+    addressBinding: Hex;
+    proofDate: number;
     eventId: Hex;
     iacaRoot: Hex;
     boundAddress: Address;

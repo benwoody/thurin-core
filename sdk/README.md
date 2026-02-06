@@ -175,7 +175,7 @@ const txHash = await thurin.mint(proof, {
   gas?: bigint,              // Optional gas override
 });
 
-// Get mint price (tiered: $1 OG, $2 Early, $5 Standard)
+// Get mint price ($5 USD, converted to ETH via Chainlink)
 const price = await thurin.getMintPrice();
 
 // Get SBT status

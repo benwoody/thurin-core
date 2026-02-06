@@ -11,6 +11,11 @@ import type {
 // Must match circuit's STATE_CODE_OFFSET in main.nr
 const STATE_CODE_OFFSET = 66;
 
+// Domain separators - must match circuits/src/nullifier.nr
+const DOMAIN_IACA_ROOT = 0x01;
+const DOMAIN_NULLIFIER = 0x02;
+const DOMAIN_ADDRESS_BINDING = 0x03;
+
 // Singleton instances for reuse
 let barretenbergAPI: Awaited<ReturnType<typeof Barretenberg.new>> | null = null;
 let noir: Noir | null = null;
@@ -65,9 +70,10 @@ export async function generateProof(
   }
 
   const timestamp = options.timestamp ?? Math.floor(Date.now() / 1000);
+  const proofDate = timestampToYYYYMMDD(timestamp);
 
   // Build witness inputs matching circuit signature
-  const witnessInputs = await buildWitnessInputs(barretenbergAPI, credential, options, timestamp);
+  const witnessInputs = await buildWitnessInputs(barretenbergAPI, credential, options, proofDate);
 
   // Execute circuit to generate witness
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -88,7 +94,8 @@ export async function generateProof(
     proof: toHex(proof.proof),
     publicInputs: {
       nullifier: witnessInputs.nullifier as Hex,
-      proofTimestamp: BigInt(timestamp),
+      addressBinding: witnessInputs.address_binding as Hex,
+      proofDate,
       eventId: witnessInputs.event_id as Hex,
       iacaRoot: witnessInputs.iaca_root as Hex,
       boundAddress: options.boundAddress,
@@ -133,7 +140,7 @@ async function buildWitnessInputs(
   bb: Barretenberg,
   credential: Credential,
   options: ProofGenerationOptions,
-  timestamp: number
+  proofDate: number
 ) {
   // Compute IACA root from public key using Poseidon2
   const iacaRoot = await computeIacaRoot(bb, credential.iacaPubkeyX, credential.iacaPubkeyY);
@@ -144,6 +151,10 @@ async function buildWitnessInputs(
   // Compute nullifier using Poseidon2
   const nullifier = await computeNullifier(bb, credential.documentNumber, eventId, iacaRoot);
 
+  // Compute address binding for front-running protection
+  const boundAddressField = addressToField(options.boundAddress);
+  const addressBinding = await computeAddressBinding(bb, nullifier, boundAddressField);
+
   // State code at offset matching circuit's STATE_CODE_OFFSET (or zeros if not proving)
   const provenState = options.proveState
     ? [credential.stateClaimBytes[STATE_CODE_OFFSET] ?? 0, credential.stateClaimBytes[STATE_CODE_OFFSET + 1] ?? 0]
@@ -152,10 +163,11 @@ async function buildWitnessInputs(
   return {
     // Public inputs (must match circuit order)
     nullifier,
-    proof_timestamp: timestamp,
+    address_binding: addressBinding,
+    proof_date: proofDate,
     event_id: eventId,
     iaca_root: iacaRoot,
-    bound_address: addressToField(options.boundAddress),
+    bound_address: boundAddressField,
     prove_age_over_21: options.proveAgeOver21 ?? false,
     prove_age_over_18: options.proveAgeOver18 ?? false,
     prove_state: options.proveState ?? false,
@@ -209,8 +221,30 @@ function padTo32Bytes(input: Uint8Array): Uint8Array {
 }
 
 /**
+ * Create a 32-byte domain separator from a small integer
+ * Matches circuit's Field representation of domain constants
+ */
+function domainSeparator(value: number): Uint8Array {
+  const bytes = new Uint8Array(32);
+  bytes[31] = value; // Big-endian: value in last byte
+  return bytes;
+}
+
+/**
+ * Convert unix timestamp to YYYYMMDD number
+ * Matches contract's _timestampToYYYYMMDD()
+ */
+function timestampToYYYYMMDD(timestamp: number): number {
+  const date = new Date(timestamp * 1000);
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth() + 1;
+  const day = date.getUTCDate();
+  return year * 10000 + month * 100 + day;
+}
+
+/**
  * Compute IACA root from public key coordinates using Poseidon2
- * Matches circuit's Poseidon2(pubkey_x, pubkey_y)
+ * Matches circuit's Poseidon2(DOMAIN_IACA_ROOT, pubkey_x, pubkey_y)
  */
 async function computeIacaRoot(
   bb: Barretenberg,
@@ -218,14 +252,14 @@ async function computeIacaRoot(
   pubkeyY: Uint8Array
 ): Promise<string> {
   const result = await bb.poseidon2Hash({
-    inputs: [padTo32Bytes(pubkeyX), padTo32Bytes(pubkeyY)],
+    inputs: [domainSeparator(DOMAIN_IACA_ROOT), padTo32Bytes(pubkeyX), padTo32Bytes(pubkeyY)],
   });
   return toHex(result.hash);
 }
 
 /**
  * Compute nullifier from document number, event ID, and IACA root using Poseidon2
- * Matches circuit's Poseidon2(doc_number, event_id, iaca_root)
+ * Matches circuit's Poseidon2(DOMAIN_NULLIFIER, doc_number, event_id, iaca_root)
  */
 async function computeNullifier(
   bb: Barretenberg,
@@ -235,9 +269,29 @@ async function computeNullifier(
 ): Promise<string> {
   const result = await bb.poseidon2Hash({
     inputs: [
+      domainSeparator(DOMAIN_NULLIFIER),
       padTo32Bytes(documentNumber),
       hexToBytes(eventId as Hex),
       hexToBytes(iacaRoot as Hex),
+    ],
+  });
+  return toHex(result.hash);
+}
+
+/**
+ * Compute address binding from nullifier and bound address using Poseidon2
+ * Matches circuit's Poseidon2(DOMAIN_ADDRESS_BINDING, nullifier, bound_address)
+ */
+async function computeAddressBinding(
+  bb: Barretenberg,
+  nullifier: string,
+  boundAddress: string
+): Promise<string> {
+  const result = await bb.poseidon2Hash({
+    inputs: [
+      domainSeparator(DOMAIN_ADDRESS_BINDING),
+      hexToBytes(nullifier as Hex),
+      hexToBytes(boundAddress as Hex),
     ],
   });
   return toHex(result.hash);
